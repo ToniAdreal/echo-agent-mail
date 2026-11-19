@@ -171,7 +171,7 @@ export interface Me {
   id: string;
   name: string;
   email: string;
-  account_status: string;
+  status: string;
   created_at: string;
 }
 
@@ -179,10 +179,22 @@ export interface OnboardingStatus {
   state: string;
   mailbox_choice: string | null;
   completed_steps: string[];
-  demo_mailbox_address: string | null;
-  sync: { status: string; percent: number; imported_count: number; total_estimate: number } | null;
-  mailboxes: MailAccount[];
-  next_action: string;
+  last_error_code: string | null;
+  mail_accounts: MailAccount[];
+}
+
+export interface SyncJob {
+  id: string;
+  mail_account_id: string;
+  mode: string;
+  environment: string;
+  status: string;
+  phase: string;
+  processed_count: number;
+  total_count: number;
+  percent: number;
+  simulated: boolean;
+  error_code: string | null;
 }
 
 export interface MailAccount {
@@ -192,32 +204,33 @@ export interface MailAccount {
   display_name: string | null;
   environment: 'demo' | 'live';
   status: string;
-  sync_status: string;
+  scopes: string[];
   last_sync_at: string | null;
-  unread_count: number;
   created_at: string;
+}
+
+export interface Person {
+  name: string | null;
+  email: string;
 }
 
 export interface MailMessage {
   id: string;
   thread_id: string;
   mail_account_id: string;
-  direction: 'inbound' | 'outbound';
-  from: { name: string | null; email: string };
-  to: { name: string | null; email: string }[];
-  cc: { name: string | null; email: string }[];
+  from_address: string;
+  from_name: string | null;
+  to_recipients: Person[];
+  cc_recipients: Person[];
   subject: string;
-  body_text: string;
+  body_text?: string;
   snippet: string;
   is_read: boolean;
   is_starred: boolean;
   is_draft: boolean;
   is_sent: boolean;
-  is_archived: boolean;
   is_trashed: boolean;
-  labels: string[];
-  importance: string;
-  has_attachments: boolean;
+  has_attachment: boolean;
   environment: 'demo' | 'live';
   created_at: string;
   attachments?: Attachment[];
@@ -226,7 +239,7 @@ export interface MailMessage {
 export interface Attachment {
   id: string;
   filename: string;
-  content_type: string;
+  mime_type: string;
   size_bytes: number;
   scan_status: string;
 }
@@ -234,24 +247,25 @@ export interface Attachment {
 export interface ThreadItem {
   id: string;
   subject: string;
-  participants: { name: string | null; email: string }[];
+  snippet: string | null;
+  participants: Person[];
   last_message_at: string;
   message_count: number;
   unread_count: number;
-  is_starred: boolean;
   is_archived: boolean;
-  is_muted: boolean;
-  labels: string[];
+  is_trashed: boolean;
   environment: 'demo' | 'live';
-  latest_snippet: string;
+  latest_message?: MailMessage;
 }
 
 export interface Draft {
   id: string;
   thread_id: string | null;
+  source_message_id: string | null;
+  message_id: string | null;
   mail_account_id: string;
-  to: { name: string | null; email: string }[];
-  cc: { name: string | null; email: string }[];
+  to_recipients: Person[];
+  cc_recipients: Person[];
   subject: string;
   body_text: string;
   status: string;
@@ -263,24 +277,25 @@ export interface Draft {
 
 export interface TaskStep {
   id: string;
-  position: number;
+  sequence: number;
   step_type: string;
   title: string;
   description: string | null;
   status: string;
-  requires_confirmation: boolean;
-  result_summary: string | null;
+  risk_level: string;
+  requires_approval: boolean;
+  output_refs: Record<string, any>;
   error_code: string | null;
-  error_message: string | null;
 }
 
 export interface TaskItem {
   id: string;
   display_id: string;
-  title: string;
   goal: string;
   status: string;
   authorization_mode: string;
+  plan: any;
+  context_scope: any;
   progress_percent: number;
   current_step_id: string | null;
   environment: 'demo' | 'live';
@@ -289,31 +304,34 @@ export interface TaskItem {
   completed_at: string | null;
 }
 
+export interface DecisionOption {
+  value: string;
+  label: string;
+  description?: string;
+}
+
 export interface Decision {
   id: string;
   task_id: string;
-  task_display_id: string | null;
   step_id: string | null;
   decision_type: string;
   prompt: string;
-  context_summary: string | null;
-  options: { id: string; label: string; description?: string }[] | null;
+  options: DecisionOption[];
   status: string;
-  selected_option_id: string | null;
-  response_text: string | null;
+  response: Record<string, unknown> | null;
   created_at: string;
 }
 
 export interface ReviewItem {
   id: string;
   task_id: string | null;
-  task_display_id: string | null;
+  task_display_id?: string | null;
   draft_id: string;
   status: string;
-  risk_level: string;
   agent_note: string | null;
   source_refs: Record<string, unknown>;
   revision: number;
+  environment: 'demo' | 'live';
   created_at: string;
   draft: Draft;
 }
@@ -328,33 +346,38 @@ export interface Automation {
   enabled: boolean;
   revision: number;
   last_run_at: string | null;
-  last_run_status: string | null;
+  created_at: string;
+}
+
+export interface BriefingDecision {
+  kind: 'review' | 'decision';
+  id: string;
+  review_id?: string;
+  decision_id?: string;
+  task_id: string | null;
+  task_display_id: string | null;
+  subject: string;
+  recipient: string | null;
+  recommendation: string | null;
+  options?: DecisionOption[];
+  status: string;
   created_at: string;
 }
 
 export interface Briefing {
-  generated_at: string;
-  environment: 'demo' | 'live';
+  environment: 'demo' | 'live' | 'none';
+  has_mailbox: boolean;
   metrics: {
-    unread_count: number;
-    pending_decisions: number;
-    active_tasks: number;
-    completed_today: number;
+    new_mail: number;
+    needs_decision: number;
+    in_progress: number;
+    delivered: number;
+    sent: number;
   };
-  decisions: {
-    id: string;
-    kind: string;
-    task_id: string;
-    task_display_id: string | null;
-    title: string;
-    description: string | null;
-    source_label: string;
-    status: string;
-    created_at: string;
-  }[];
-  active_tasks: TaskItem[];
+  decisions: BriefingDecision[];
+  tasks: TaskItem[];
   recent_messages: MailMessage[];
-  activity: { id: string; text: string; resource_type: string | null; created_at: string }[];
+  recent_activity: { id: string; action: string; resource_type: string | null; result: string; created_at: string }[];
   todos: { id: string; title: string; due_at: string | null; status: string }[];
-  badges: { review: number; tasks: number; decisions: number; inbox_unread: number };
+  badges: { unread: number; review: number; decisions: number; tasks_active: number; notifications: number };
 }

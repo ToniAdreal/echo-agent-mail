@@ -134,6 +134,24 @@ def create_app() -> FastAPI:
         log.info("intenda backend ready (env=%s, model=%s, llm_configured=%s)",
                  settings.APP_ENV, settings.LLM_MODEL, bool(settings.LLM_API_KEY))
 
+    # --- production: serve the built frontend (dist/) with SPA fallback ---
+    from pathlib import Path
+
+    from fastapi.responses import FileResponse
+
+    dist_dir = Path(settings.FRONTEND_DIST)
+    if dist_dir.is_dir():
+        index_file = dist_dir / "index.html"
+
+        @app.get("/{full_path:path}")
+        def spa(full_path: str):
+            if full_path.startswith("api/"):
+                raise ApiError(404, "NOT_FOUND", "The requested resource was not found.")
+            candidate = (dist_dir / full_path).resolve()
+            if full_path and candidate.is_file() and dist_dir.resolve() in candidate.parents:
+                return FileResponse(candidate)
+            return FileResponse(index_file)
+
     return app
 
 

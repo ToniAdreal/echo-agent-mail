@@ -129,35 +129,41 @@ def perform_send(db: DbSession, user: m.User, draft: m.EmailDraft) -> dict:
         db.add(thread)
         db.flush()
         draft.thread_id = thread.id
-    sent_msg = m.EmailMessage(
-        user_id=user.id,
-        mail_account_id=draft.mail_account_id,
-        thread_id=thread.id,
-        from_address=account.email_address if account else "you@demo.intenda.example",
-        from_name=user.name,
-        to_recipients=draft.to_recipients or [],
-        cc_recipients=draft.cc_recipients or [],
-        bcc_recipients=draft.bcc_recipients or [],
-        subject=draft.subject,
-        body_text=draft.body_text,
-        snippet=(draft.body_text or "").replace("\n", " ")[:110],
-        sent_at=m.now(),
-        is_read=True,
-        is_sent=True,
-        environment=environment,
-    )
-    db.add(sent_msg)
-    db.flush()
-    if draft.message_id:
-        backing = db.get(m.EmailMessage, draft.message_id)
-        if backing is not None:
-            backing.is_draft = False
-            backing.is_sent = True
-            backing.sent_at = m.now()
-            backing.body_text = draft.body_text
-            backing.subject = draft.subject
-            backing.to_recipients = draft.to_recipients
-            sent_msg = backing
+    backing = db.get(m.EmailMessage, draft.message_id) if draft.message_id else None
+    if backing is not None:
+        # The draft's backing message becomes the sent message in place;
+        # creating a second row would double-count the Sent folder.
+        backing.is_draft = False
+        backing.is_sent = True
+        backing.sent_at = m.now()
+        backing.body_text = draft.body_text
+        backing.subject = draft.subject
+        backing.to_recipients = draft.to_recipients
+        backing.cc_recipients = draft.cc_recipients or []
+        backing.bcc_recipients = draft.bcc_recipients or []
+        backing.snippet = (draft.body_text or "").replace("\n", " ")[:110]
+        backing.is_read = True
+        sent_msg = backing
+    else:
+        sent_msg = m.EmailMessage(
+            user_id=user.id,
+            mail_account_id=draft.mail_account_id,
+            thread_id=thread.id,
+            from_address=account.email_address if account else "you@demo.intenda.example",
+            from_name=user.name,
+            to_recipients=draft.to_recipients or [],
+            cc_recipients=draft.cc_recipients or [],
+            bcc_recipients=draft.bcc_recipients or [],
+            subject=draft.subject,
+            body_text=draft.body_text,
+            snippet=(draft.body_text or "").replace("\n", " ")[:110],
+            sent_at=m.now(),
+            is_read=True,
+            is_sent=True,
+            environment=environment,
+        )
+        db.add(sent_msg)
+        db.flush()
     thread.message_count = (
         db.query(m.EmailMessage).filter(m.EmailMessage.thread_id == thread.id).count()
     )
@@ -210,6 +216,11 @@ def after_review_resolved(db: DbSession, item: m.ReviewItem, approved: bool) -> 
         task.status = "completed"
         task.completed_at = m.now()
         emit_task_event(db, task, "task.completed", {"completed_at": m.now().isoformat()})
+    elif approved and task.status == "waiting_user":
+        # Steps remain after the send (e.g. the report step): hand the task
+        # back to the runner instead of leaving it parked.
+        task.status = "running"
+        emit_task_event(db, task, "task.resumed", {"resumed_at": m.now().isoformat()})
     elif not approved and task.status == "waiting_user":
         task.status = "needs_attention"
         emit_task_event(db, task, "task.log.appended",

@@ -194,3 +194,66 @@ Build follows BUILD_BRIEF_V5.md (process) and Intenda-Product-Specification-v1.0
 - The seeded demo user's "This session" row and session management are
   fully functional; the demo account shares the same Argon2id + cookie
   session machinery as registered accounts.
+
+---
+
+## Stage 5 — Production packaging, test suite, smoke (complete)
+
+- render.yaml: single Render free Web Service. Build installs Python deps
+  into server/.venv, npm install + npm run build; start runs uvicorn with
+  --app-dir server; healthCheckPath /api/v1/health; LLM_API_KEY and
+  SESSION_SECRET declared sync:false (dashboard-only, never in repo).
+- FastAPI serves the built frontend: StaticFiles on FRONTEND_DIST with an
+  SPA fallback for non-API routes; unknown /api/v1 routes keep the JSON
+  error envelope (verified live: /, /briefing 200; unknown API 404
+  envelope; static PNG 200).
+- Backend test suite (server/tests/, pytest): 22 tests covering auth +
+  CSRF + password reset, demo seed invariants, mail/drafts/send
+  idempotency, revision conflicts, reply threading, archive/restore,
+  three authorization modes end to end, task plan requirement,
+  pause/resume/terminate, seeded AG-2051 choice resolution, agent SSE +
+  non-streaming fallback with the exact spec 5.5 wording, automation run,
+  settings round-trip. Result: 22 passed.
+- Smoke script (scripts/smoke_v5.py): boots real uvicorn on a throwaway
+  DB and checks health, register, demo seed, onboarding READY, briefing
+  metrics, inbox, SSE fallback, task gating at the Review Queue,
+  WebSocket server.hello, SPA serving, API 404 envelope. Result: 13/13.
+- Frontend after the Stage 5 API remapping: tsc --noEmit clean; vite
+  build succeeds (dist JS 277 kB / 79 kB gzip, CSS 37 kB).
+- README rewritten for the full product: local run, env table, tests,
+  Render deploy notes.
+
+### Stage 5 deviations / corrections found while aligning to the real API
+- The Stage 1-2 backend implements the spec's own endpoint shapes, which
+  differ from early Stage 4 assumptions. Stage 5 remapped the frontend
+  and tests onto the real surface rather than changing the backend:
+  briefing at GET /api/v1/briefing; mail under /api/v1/emails (+ /compose
+  is draft-only, sends go through /emails/{id}/send with confirm_send);
+  archive is message-grained (GET /api/v1/archive, restore per message,
+  restoring un-archives the whole thread); account disconnect is
+  DELETE /api/v1/accounts/{id}; session revoke is
+  DELETE /api/v1/auth/sessions/{id}; password reset lives under
+  /api/v1/auth/password/reset/*. Authorization modes use the spec names
+  confirm_every_step / confirm_milestones / confirm_before_send.
+- Search (GET /api/v1/search) returns messages only; the top-bar search
+  UI therefore shows message results (no task/contact groups).
+- Register requires terms_accepted (spec Section 3 acknowledgement);
+  the Register page gained the matching checkbox.
+- Demo-mode password reset returns the reset token in the API response
+  (DEMO_MODE_ENABLED only): a demo deployment has no outbound mail
+  channel, so without this the reset flow could never complete. Live
+  deployments must keep DEMO_MODE_ENABLED off for this path.
+- Runner bug fixed: the send-step pre-check parked a task at the Review
+  Queue gate before earlier plan steps had run (deadlock for any plan
+  containing a send step). The gate now applies only once the send step
+  is current, and completing a draft step links its review_id into the
+  send step's input_refs.
+- perform_send bug fixed: it created a new sent message AND flipped the
+  draft's backing message to sent, double-counting Sent (+2 per send).
+  The backing message now transitions in place.
+- after_review_resolved bug fixed: approving a review with steps after
+  the send step (e.g. report) left the task parked in waiting_user
+  forever; it now returns the task to running.
+- server/.env.example rewritten to the config module's real variable
+  names (LLM_*, GOOGLE_*/MICROSOFT_* OAuth, SESSION_SECRET,
+  TOKEN_ENCRYPTION_KEY, DEMO_* , AGENT_REQUESTS_PER_*).

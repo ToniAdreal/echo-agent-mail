@@ -1,0 +1,35 @@
+# Intenda — single free web service: FastAPI serves the API, the WebSocket
+# channel and the built frontend (dist/) from one process.
+services:
+  - type: web
+    name: intenda
+    runtime: python
+    plan: free
+    buildCommand: |
+      pip install -r server/requirements.txt
+      npm install --no-audit --no-fund
+      npm run build
+    startCommand: uvicorn --app-dir server app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: APP_ENV
+        value: production
+      # SQLite on the free tier is ephemeral (resets on redeploy/spin-down);
+      # point DATABASE_URL at a Postgres instance for durable data.
+      - key: DATABASE_URL
+        value: sqlite:////tmp/intenda.db
+      - key: DEMO_SYNC_DELAY_MS
+        value: "450"
+      # Agent model (optional): set LLM_API_KEY in the Render dashboard to
+      # connect a live model. Without it, the spec's deterministic fallback
+      # answers and no model side effects occur. Never commit a key.
+      - key: LLM_BASE_URL
+        value: https://api.groq.com/openai/v1
+      - key: LLM_MODEL
+        value: openai/gpt-oss-20b
+      - key: LLM_API_KEY
+        sync: false
+      - key: SESSION_SECRET
+        sync: false

@@ -191,6 +191,7 @@ def reset_request(body: ResetRequestBody, request: Request, db: DbSession = Depe
         raise ApiError(429, "RATE_LIMITED", "Too many reset requests. Please retry later.")
     email = body.email.strip().lower()
     user = db.query(User).filter(User.email == email, User.deleted_at.is_(None)).first()
+    token = None
     if user is not None:
         token = new_token(24)
         db.add(
@@ -204,8 +205,13 @@ def reset_request(body: ResetRequestBody, request: Request, db: DbSession = Depe
         )
         audit(db, user, "auth.password_reset_requested", "user", user.id, request=request)
         db.commit()
-    # Always accepted: never reveal whether the account exists.
-    return ok(request, {"accepted": True})
+    # Always accepted: never reveal whether the account exists. In demo mode
+    # (no outbound mail channel) the token is returned so the flow can be
+    # completed end to end; production deployments email the link instead.
+    payload: dict = {"accepted": True}
+    if token is not None and settings.DEMO_MODE_ENABLED:
+        payload["reset_token"] = token
+    return ok(request, payload)
 
 
 @router.post("/password/reset/complete")

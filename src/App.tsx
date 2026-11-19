@@ -66,10 +66,15 @@ function Shell() {
   );
 
   const refreshBadges = useCallback(() => {
-    api<BriefingData>('/api/v1/briefing/today')
+    api<BriefingData>('/api/v1/briefing')
       .then((b) => {
-        setBadges(b.badges);
-        setEnvironment(b.environment);
+        setBadges({
+          review: b.badges.review,
+          tasks: b.badges.tasks_active,
+          decisions: b.badges.decisions,
+          inbox_unread: b.badges.unread,
+        });
+        setEnvironment(b.environment === 'live' ? 'live' : 'demo');
       })
       .catch(() => {});
     api<{ available: boolean }>('/api/v1/agent/status')

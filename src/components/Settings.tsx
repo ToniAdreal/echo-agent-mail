@@ -37,8 +37,7 @@ interface SessionRow {
   created_at: string;
   last_seen_at: string;
   user_agent: string | null;
-  is_current: boolean;
-  revoked_at: string | null;
+  current: boolean;
 }
 
 interface Contact {
@@ -52,7 +51,7 @@ interface Contact {
 export default function Settings() {
   const toast = useToast();
   const app = useApp();
-  const { data, error, loading, reload } = useAsync(() => api<{ settings: SettingsData }>('/api/v1/settings'), []);
+  const { data, error, loading, reload } = useAsync(() => api<SettingsData>('/api/v1/settings'), []);
   const { data: sessions, reload: reloadSessions } = useAsync(
     () => api<{ items: SessionRow[] }>('/api/v1/auth/sessions'),
     [],
@@ -70,7 +69,7 @@ export default function Settings() {
   const [newContact, setNewContact] = useState({ name: '', email: '', company: '' });
 
   useEffect(() => {
-    if (data?.settings) setName(data.settings.profile.name);
+    if (data) setName(data.profile.name);
   }, [data]);
 
   if (loading) {
@@ -87,7 +86,7 @@ export default function Settings() {
       </div>
     );
   }
-  const s = data.settings;
+  const s = data;
 
   const patch = async (body: Record<string, unknown>, okText?: string) => {
     setBusy(true);
@@ -191,7 +190,7 @@ export default function Settings() {
                   {mb.email_address} {mb.environment === 'demo' ? <span className="demo-label">Demo</span> : <span className="live-label">Live</span>}
                 </span>
                 <span className="sr-desc" style={{ display: 'block' }}>
-                  {mb.provider} · {mb.status} · sync {mb.sync_status}
+                  {mb.provider} · {mb.status}
                   {mb.last_sync_at ? ` · last synced ${fmtDateTime(mb.last_sync_at)}` : ''}
                 </span>
               </span>
@@ -201,7 +200,7 @@ export default function Settings() {
                 onClick={async () => {
                   setBusy(true);
                   try {
-                    await api(`/api/v1/mail-accounts/${mb.id}`, { method: 'DELETE' });
+                    await api(`/api/v1/accounts/${mb.id}`, { method: 'DELETE' });
                     toast({ text: 'Mailbox disconnected and its synced data deleted.' });
                     reload();
                   } catch (e) {
@@ -351,20 +350,18 @@ export default function Settings() {
           {(sessions?.items ?? []).map((sess) => (
             <div key={sess.id} className="switch-row">
               <span className="sr-main">
-                <span className="sr-title">
-                  {sess.is_current ? 'This session' : 'Session'} {sess.revoked_at ? '· revoked' : ''}
-                </span>
+                <span className="sr-title">{sess.current ? 'This session' : 'Session'}</span>
                 <span className="sr-desc" style={{ display: 'block' }}>
                   Signed in {fmtDateTime(sess.created_at)} · last active {fmtDateTime(sess.last_seen_at)}
                   {sess.user_agent ? ` · ${sess.user_agent.slice(0, 60)}` : ''}
                 </span>
               </span>
-              {!sess.is_current && !sess.revoked_at && (
+              {!sess.current && (
                 <button
                   className="btn btn-ghost"
                   onClick={async () => {
                     try {
-                      await api(`/api/v1/auth/sessions/${sess.id}/revoke`, { method: 'POST', body: {} });
+                      await api(`/api/v1/auth/sessions/${sess.id}`, { method: 'DELETE' });
                       reloadSessions();
                     } catch (e) {
                       toast({ text: errorText(e), error: true });

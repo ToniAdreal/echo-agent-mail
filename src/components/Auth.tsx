@@ -86,6 +86,7 @@ export function RegisterPage({ onAuthed }: { onAuthed: () => void }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
+  const [terms, setTerms] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
 
@@ -95,10 +96,17 @@ export function RegisterPage({ onAuthed }: { onAuthed: () => void }) {
       setError(new Error('Passwords do not match.'));
       return;
     }
+    if (!terms) {
+      setError(new Error('Please accept the Terms and Privacy Policy to continue.'));
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
-      await api('/api/v1/auth/register', { method: 'POST', body: { name, email, password } });
+      await api('/api/v1/auth/register', {
+        method: 'POST',
+        body: { name, email, password, terms_accepted: terms },
+      });
       onAuthed();
     } catch (err) {
       setError(err);
@@ -132,6 +140,19 @@ export function RegisterPage({ onAuthed }: { onAuthed: () => void }) {
           <label htmlFor="reg-confirm">Confirm password</label>
           <input id="reg-confirm" type="password" autoComplete="new-password" required value={confirm} onChange={(e) => setConfirm(e.target.value)} />
         </div>
+        <div className="field">
+          <label style={{ display: 'flex', gap: 9, alignItems: 'flex-start', fontWeight: 500, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={terms}
+              onChange={(e) => setTerms(e.target.checked)}
+              style={{ width: 'auto', marginTop: 2 }}
+            />
+            <span>
+              I agree to the Terms of Service and Privacy Policy. Intenda processes my mailbox content only to provide the service and never uses it to train models.
+            </span>
+          </label>
+        </div>
         <button className="btn btn-primary btn-block btn-lg" type="submit" disabled={busy}>
           {busy ? 'Creating account…' : 'Create account'}
         </button>
@@ -162,7 +183,7 @@ export function ForgotPasswordPage() {
     setBusy(true);
     setError(null);
     try {
-      const r = await api<{ reset_token?: string }>('/api/v1/auth/password-reset/request', {
+      const r = await api<{ reset_token?: string }>('/api/v1/auth/password/reset/request', {
         method: 'POST',
         body: { email },
       });
@@ -181,7 +202,7 @@ export function ForgotPasswordPage() {
     setBusy(true);
     setError(null);
     try {
-      await api('/api/v1/auth/password-reset/complete', {
+      await api('/api/v1/auth/password/reset/complete', {
         method: 'POST',
         body: { token, new_password: newPassword },
       });

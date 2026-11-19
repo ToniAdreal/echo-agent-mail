@@ -3,6 +3,7 @@ import { AlertTriangle, Check, Clock, Hand, Pause, Play, RotateCcw, X } from 'lu
 import {
   api,
   type Decision,
+  type ReviewItem,
   type TaskItem,
   type TaskStep,
 } from '../lib/api';
@@ -21,15 +22,21 @@ import {
 
 const STATUS_PILL: Record<string, string> = {
   running: 'pill-accent',
+  queued: 'pill-neutral',
   waiting_user: 'pill-warn',
   paused: 'pill-neutral',
+  takeover: 'pill-info',
   manual_control: 'pill-info',
   needs_attention: 'pill-danger',
   failed: 'pill-danger',
   completed: 'pill-ok',
   cancelled: 'pill-neutral',
   draft: 'pill-neutral',
-  queued: 'pill-neutral',
+  pending: 'pill-neutral',
+  modified: 'pill-warn',
+  approved: 'pill-ok',
+  rejected: 'pill-danger',
+  sent: 'pill-ok',
 };
 
 const MODE_LABEL: Record<string, string> = {
@@ -90,7 +97,7 @@ function TaskList() {
               <button key={t.id} className="list-row" onClick={() => navigate(`/tasks/${t.id}`)}>
                 <span className="list-row-main">
                   <span className="list-row-title">
-                    {t.title} <span className="mono" style={{ fontSize: 12, color: 'var(--t4)' }}>{t.display_id}</span>
+                    {t.goal} <span className="mono" style={{ fontSize: 12, color: 'var(--t4)' }}>{t.display_id}</span>
                   </span>
                   <span className="list-row-meta" style={{ display: 'block' }}>
                     {MODE_LABEL[t.authorization_mode] ?? t.authorization_mode} · Updated {timeAgo(t.updated_at)}
@@ -111,11 +118,10 @@ function TaskList() {
 }
 
 interface TaskDetailData {
-  task: TaskItem & { plan: any; context_scope: any; result_summary: string | null };
+  task: TaskItem;
   steps: TaskStep[];
-  decisions: Decision[];
-  events: { id: string; event_type: string; message: string | null; created_at: string }[];
-  review_items: { id: string; status: string }[];
+  latest_events: { id: string; event_type: string; payload: Record<string, any>; created_at: string }[];
+  outputs: ReviewItem[];
 }
 
 function TaskDetail({ taskId }: { taskId: string }) {
@@ -125,17 +131,23 @@ function TaskDetail({ taskId }: { taskId: string }) {
     () => api<TaskDetailData>(`/api/v1/tasks/${taskId}`),
     [taskId],
   );
+  const { data: decisionData, reload: reloadDecisions } = useAsync(
+    () => api<{ items: Decision[] }>(`/api/v1/decisions?task_id=${taskId}`),
+    [taskId],
+  );
   const [busy, setBusy] = useState(false);
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [freeText, setFreeText] = useState<Record<string, string>>({});
 
-  // Live updates arrive over WebSocket in App; poll as a reliable fallback.
   useEffect(() => {
     const t = window.setInterval(() => {
-      if (data && ['running', 'waiting_user'].includes(data.task.status)) reload();
+      if (data && ['running', 'waiting_user', 'queued'].includes(data.task.status)) {
+        reload();
+        reloadDecisions();
+      }
     }, 4000);
     return () => window.clearInterval(t);
-  }, [data?.task.status, reload]);
+  }, [data?.task.status, reload, reloadDecisions]);
 
   if (loading) {
     return (
@@ -157,8 +169,9 @@ function TaskDetail({ taskId }: { taskId: string }) {
     );
   }
 
-  const { task, steps, decisions } = data;
-  const pending = decisions.filter((d) => d.status === 'pending');
+  const { task, steps, latest_events, outputs } = data;
+  const pending = (decisionData?.items ?? []).filter((d) => d.status === 'pending');
+  const pendingOutputs = outputs.filter((o) => o.status === 'pending' || o.status === 'modified');
 
   const call = async (fn: () => Promise<unknown>, okText?: string) => {
     setBusy(true);
@@ -167,6 +180,7 @@ function TaskDetail({ taskId }: { taskId: string }) {
       if (okText) toast({ text: okText });
       refreshBadges();
       reload();
+      reloadDecisions();
     } catch (e) {
       toast({ text: errorText(e), error: true });
     } finally {
@@ -184,8 +198,10 @@ function TaskDetail({ taskId }: { taskId: string }) {
           <span className="kicker">
             TASK <span className="mono">{task.display_id}</span>
           </span>
-          <h1>{task.title}</h1>
-          <p className="view-sub">{task.goal}</p>
+          <h1 style={{ fontSize: 22, lineHeight: 1.35 }}>{task.goal}</h1>
+          <p className="view-sub">
+            {MODE_LABEL[task.authorization_mode] ?? task.authorization_mode} · Created {fmtDateTime(task.created_at)}
+          </p>
         </div>
         <StatusPill status={task.status} />
       </div>
@@ -197,21 +213,15 @@ function TaskDetail({ taskId }: { taskId: string }) {
               ? 'Delivered'
               : task.status === 'waiting_user'
                 ? 'Waiting for your decision below'
-                : task.status === 'manual_control'
+                : task.status === 'takeover' || task.status === 'manual_control'
                   ? 'You have manual control — the Agent is paused'
-                  : task.status.replace(/_/g, ' ')}{' '}
-            · {MODE_LABEL[task.authorization_mode] ?? task.authorization_mode} · Created {fmtDateTime(task.created_at)}
+                  : task.status.replace(/_/g, ' ')}
           </span>
           <span className="progress-pct">{task.progress_percent}%</span>
         </div>
         <span className="progress progress-lg">
           <span className="progress-bar" style={{ width: `${task.progress_percent}%` }} />
         </span>
-        {task.result_summary && (
-          <div className="state-banner done">
-            <strong>Result:</strong> {task.result_summary}
-          </div>
-        )}
       </section>
 
       <div className="task-grid">
@@ -237,31 +247,39 @@ function TaskDetail({ taskId }: { taskId: string }) {
                 ) : s.status === 'waiting_user' ? (
                   <Clock size={14} />
                 ) : (
-                  <span style={{ fontSize: 11, fontWeight: 700 }}>{s.position + 1}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700 }}>{s.sequence + 1}</span>
                 )}
               </span>
               <span className="tl-body">
                 <span className="tl-label">{s.title}</span>
                 <span className="tl-note" style={{ display: 'block' }}>
                   {s.step_type.replace(/_/g, ' ')} · {s.status.replace(/_/g, ' ')}
-                  {s.requires_confirmation ? ' · confirmation gate' : ''}
+                  {s.requires_approval ? ' · confirmation gate' : ''}
+                  {s.risk_level && s.risk_level !== 'low' ? ` · ${s.risk_level} risk` : ''}
                 </span>
-                {s.result_summary && <span className="tl-note" style={{ display: 'block' }}>{s.result_summary}</span>}
-                {s.error_message && (
+                {s.output_refs?.summary && (
+                  <span className="tl-note" style={{ display: 'block' }}>{String(s.output_refs.summary)}</span>
+                )}
+                {s.output_refs?.chosen_option_label && (
+                  <span className="tl-note" style={{ display: 'block' }}>
+                    You chose: {String(s.output_refs.chosen_option_label)}
+                  </span>
+                )}
+                {s.status === 'failed' && (
                   <span className="tl-note" style={{ display: 'block', color: 'var(--danger)' }}>
-                    {s.error_message}
-                    {s.status === 'failed' && (
-                      <>
-                        {' '}
-                        <button
-                          className="link-btn"
-                          disabled={busy}
-                          onClick={() => call(() => api(`/api/v1/tasks/${task.id}/steps/${s.id}/retry`, { method: 'POST', body: {} }), 'Step queued for retry.')}
-                        >
-                          Retry step
-                        </button>
-                      </>
-                    )}
+                    Failed{s.error_code ? ` (${s.error_code})` : ''}.{' '}
+                    <button
+                      className="link-btn"
+                      disabled={busy}
+                      onClick={() =>
+                        call(
+                          () => api(`/api/v1/tasks/${task.id}/retry`, { method: 'POST', body: { step_id: s.id, confirm_retry: true } }),
+                          'Step queued for retry.',
+                        )
+                      }
+                    >
+                      Retry step
+                    </button>
                   </span>
                 )}
               </span>
@@ -271,11 +289,11 @@ function TaskDetail({ taskId }: { taskId: string }) {
           <div className="section-head" style={{ marginTop: 22 }}>
             <h2>Activity</h2>
           </div>
-          {data.events.length === 0 && <div className="empty-mini">No events yet.</div>}
-          {data.events.slice(0, 12).map((e) => (
+          {latest_events.length === 0 && <div className="empty-mini">No events yet.</div>}
+          {latest_events.slice(0, 12).map((e) => (
             <div key={e.id} className="feed-item">
               <span className="feed-text">
-                {e.message ?? e.event_type.replace(/[._]/g, ' ')}
+                {e.payload?.message ?? e.event_type.replace(/[._]/g, ' ')}
               </span>
               <span className="feed-time">{timeAgo(e.created_at)}</span>
             </div>
@@ -289,16 +307,15 @@ function TaskDetail({ taskId }: { taskId: string }) {
                 <Clock size={12} /> Decision needed
               </span>
               <h3 className="gate-heading">{d.prompt}</h3>
-              {d.context_summary && <p className="gate-desc">{d.context_summary}</p>}
-              {d.decision_type === 'choose_option' && d.options && (
+              {d.decision_type === 'choose_option' && d.options.length > 0 && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12 }}>
                   {d.options.map((o) => (
                     <button
-                      key={o.id}
+                      key={o.value}
                       className="tone-card"
                       style={{ textAlign: 'left', cursor: 'pointer', marginTop: 0 }}
                       disabled={busy}
-                      onClick={() => resolve(d, { choice: o.id }, `“${o.label}” selected. The task continues.`)}
+                      onClick={() => resolve(d, { choice: o.value }, `“${o.label}” selected. The task continues.`)}
                     >
                       <span className="tone-head">{o.label}</span>
                       {o.description && <span className="tone-desc" style={{ display: 'block' }}>{o.description}</span>}
@@ -320,11 +337,11 @@ function TaskDetail({ taskId }: { taskId: string }) {
                     <button
                       className="btn btn-primary"
                       disabled={busy || !(freeText[d.id] ?? '').trim()}
-                      onClick={() => resolve(d, { response_text: freeText[d.id] }, 'Instruction sent to the Agent.')}
+                      onClick={() => resolve(d, { choice: 'approve', comment: freeText[d.id] }, 'Instruction sent to the Agent.')}
                     >
                       Send instruction
                     </button>
-                    <button className="btn btn-ghost" disabled={busy} onClick={() => resolve(d, { action: 'reject' }, 'Declined. The task is paused.')}>
+                    <button className="btn btn-ghost" disabled={busy} onClick={() => resolve(d, { choice: 'reject' }, 'Declined. The task is paused.')}>
                       Decline &amp; pause
                     </button>
                   </div>
@@ -338,12 +355,12 @@ function TaskDetail({ taskId }: { taskId: string }) {
                     onClick={() =>
                       d.decision_type === 'approve_send'
                         ? navigate('/review')
-                        : resolve(d, { action: 'approve' }, 'Approved. The task continues.')
+                        : resolve(d, { choice: 'approve' }, 'Approved. The task continues.')
                     }
                   >
                     {d.decision_type === 'approve_send' ? 'Review the draft' : 'Approve step'}
                   </button>
-                  <button className="btn btn-ghost" disabled={busy} onClick={() => resolve(d, { action: 'reject' }, 'Declined. The task is paused.')}>
+                  <button className="btn btn-ghost" disabled={busy} onClick={() => resolve(d, { choice: 'reject' }, 'Declined. The task is paused.')}>
                     Decline
                   </button>
                 </div>
@@ -351,7 +368,7 @@ function TaskDetail({ taskId }: { taskId: string }) {
             </section>
           ))}
 
-          {data.review_items.some((r) => r.status === 'pending') && (
+          {pendingOutputs.length > 0 && (
             <section className="panel draft-preview-panel">
               <div className="section-head">
                 <h2>Draft waiting in Review Queue</h2>
@@ -370,7 +387,7 @@ function TaskDetail({ taskId }: { taskId: string }) {
               <h2>Controls</h2>
             </div>
             <div className="btn-row" style={{ marginTop: 0 }}>
-              {task.status === 'running' && (
+              {(task.status === 'running' || task.status === 'waiting_user') && (
                 <button className="btn btn-dark" disabled={busy} onClick={() => call(() => api(`/api/v1/tasks/${task.id}/pause`, { method: 'POST', body: {} }), 'Task paused.')}>
                   <Pause size={14} /> Pause
                 </button>
@@ -384,7 +401,7 @@ function TaskDetail({ taskId }: { taskId: string }) {
                   <Play size={14} /> Resume
                 </button>
               )}
-              {!['completed', 'cancelled', 'manual_control'].includes(task.status) && (
+              {!['completed', 'cancelled', 'takeover'].includes(task.status) && (
                 <button
                   className="btn btn-dark"
                   disabled={busy}
@@ -393,7 +410,7 @@ function TaskDetail({ taskId }: { taskId: string }) {
                   <Hand size={14} /> Take over
                 </button>
               )}
-              {task.status === 'manual_control' && (
+              {task.status === 'takeover' && (
                 <button
                   className="btn btn-dark"
                   disabled={busy}
@@ -434,7 +451,7 @@ function TaskDetail({ taskId }: { taskId: string }) {
                     <span className="plan-num">{i + 1}</span>
                     <span className="plan-step-main">
                       <span className="plan-step-label" style={{ fontSize: 13.5 }}>{s.title}</span>
-                      <span className="plan-step-note" style={{ display: 'block' }}>{s.step_type.replace(/_/g, ' ')}</span>
+                      <span className="plan-step-note" style={{ display: 'block' }}>{String(s.step_type).replace(/_/g, ' ')}</span>
                     </span>
                   </div>
                 ))}

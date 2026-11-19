@@ -1,76 +1,80 @@
-# Intenda 意达 — Agent Native 邮箱（原型）
+# Intenda 意达 — Agent Native Email
 
-一款为 Agent 时代重新设计的邮箱网页前端原型。全部数据为前端模拟，无后端、无真实邮件。
+**From Intent to Done.** Intenda is an agent-native email workspace: you state the outcome, the Agent reads the context you approve, proposes a plan, works under the authorization level you choose, and brings drafts back to your Review Queue. Nothing sends without your approval path.
 
-## 运行
+This repository contains the full product (V5): a FastAPI + SQLite backend (`server/`) and a React + TypeScript frontend (project root) that the backend serves in production. The demo mailbox is fully fictional; demo sends are simulated and stored in Sent.
+
+## Quick start (local)
+
+Prerequisites: Python 3.12, Node 20+.
 
 ```bash
+# 1. Backend deps (venv inside server/)
+python3 -m venv server/.venv
+server/.venv/bin/pip install -r server/requirements.txt
+
+# 2. Frontend deps + build
 npm install
-npm run dev      # 本地开发
-npm run build    # 生产构建（tsc 类型检查 + vite build）
-npm run preview  # 预览构建产物
+npm run build        # tsc type-check + vite build -> dist/
+
+# 3. Run (single process serves API + SPA on :8000)
+server/.venv/bin/python -m uvicorn app.main:app --app-dir server --port 8000
 ```
 
-技术栈：Vite + React + TypeScript，原生 CSS，无 UI 组件库。
+Open http://127.0.0.1:8000 — create an account, choose **Try the Demo Mailbox**, watch the simulated sync, and land on the Today Briefing. A one-click demo session is also available on the sign-in page.
 
-视觉系统为 V4 定稿：黑白主色加蓝色单一强调（#2563EB），马卡龙卡其只做中性状态与小面积点缀，支持日间与夜间双模式（顶栏切换，选择保存在 localStorage，默认夜间）。夜间底色 #090A0C、日间底色 #F5F6F7，表面扁平、细边框，Codex 式紧凑的信息组织。装饰素材为图像模型生成的透明底 PNG（银河轨道、星云光晕、轨道 motif、意图缎带），logo 有银色（夜间）与近黑（日间）两版，字体为 Inter + Noto Sans SC。
+Frontend dev mode (hot reload, API proxied to :8000): `npm run dev`.
 
-## 产品概念
+## Configuration
 
-在 GUI 时代，邮箱是一列等着你逐封处理的邮件：你找邮件、读前情、写回复、记跟进，每一步都是你亲自操作。
-在 Agent 时代，工作方式变了：**你说结果，Agent 读上下文、列计划、在授权范围内执行，再把进展和结果带回来。**
+All configuration is via environment variables (see `server/.env.example`). Key ones:
 
-所以 Intenda 的首页不是收件箱，而是一份**简报**：
-
-- **今日简报**：Agent 的夜间小结（处理了多少、归档了多少、起草了多少），加上真正需要你的三件事。
-- **需要你决定**：Agent 处理不了、也不应该替你决定的事，以卡片呈现：上下文摘要、Agent 的建议、以及批准 / 编辑 / 自己处理 / 忽略四个动作。
-- **进行中与已完成**：Agent 正在做的事和已经交付的结果，随时可见，随时可接管。
-
-## 设计理念
-
-### 1. 首页是简报，不是列表
-
-列表把判断成本全留给用户。简报反过来：Agent 先消化信息，只把「决定」留给用户。用户的角色从操作员变成审批者与目标设定者。
-
-### 2. 决策队列：建议先行，决定归人
-
-每张决策卡都包含三段：发生了什么（上下文）、Agent 建议怎么做（建议必须给出）、以及四个出口。批准是默认路径，编辑保留控制感，「我自己处理」保证任何事都能拿回来。
-
-### 3. 每个任务单独的授权范围
-
-委托时为单个任务选择授权级别，而不是一个全局开关：
-
-| 级别 | 行为 |
+| Variable | Meaning |
 | --- | --- |
-| 每一步问我 | 每执行一步都先征得同意 |
-| 关键节点问我（默认） | 只在起草、发送等关键节点停下 |
-| 全自动，发前确认 | 自行推进，只在真正发送前确认 |
+| `LLM_BASE_URL` | OpenAI-compatible base URL (default `https://api.groq.com/openai/v1`) |
+| `LLM_API_KEY` | Provider API key (falls back to `GROQ_API_KEY`). **Never commit a key.** |
+| `LLM_MODEL` | Model id (default `openai/gpt-oss-20b`) |
+| `SESSION_SECRET` | Session cookie signing secret (set in production) |
+| `DATABASE_URL` | SQLite path (default `sqlite:///./intenda.db` under `server/`) |
+| `FRONTEND_DIST` | Built frontend directory served by FastAPI (default `../dist`) |
 
-侧边栏还有一层默认授权边界：整理类可自动执行，起草类发送前确认，承诺类（报价、时间、金额）必须由用户决定。
+With no LLM key configured the product still works: the Agent answers with the deterministic spec 5.5 fallback ("I'm temporarily unable to reach the AI model…"), takes no side effects, and all delegation, review and mail flows remain fully usable.
 
-### 4. 过程可见：计划、进度、理由、审计
+## Tests & smoke
 
-- 执行前先展示分步计划；
-- 执行中每一步附一句 Agent 的判断说明（找到了什么、依据是什么）；
-- 任务可暂停、接管、终止，接管后明确进入「已转为手动」状态；
-- 所有动作写入活动日志（审计），谁在什么时候做了什么可追溯。
+```bash
+server/.venv/bin/python -m pytest server/tests -q   # backend suite (22 tests)
+python3 scripts/smoke_v5.py                          # boots real uvicorn, 13 end-to-end checks
+```
 
-### 5. 手动模式永不消失
+## Deploy (Render free tier)
 
-收件箱完整保留传统形态：列表、阅读窗格、搜索、手动回复。任何一封邮件都可以「交给 Agent」转成一次委托，也可以自己写。Agent 是新增的一层，不是替换。
+`render.yaml` defines a single free Web Service:
 
-## 视图一览
+- **Build:** install Python deps, `npm install`, `npm run build`
+- **Start:** `uvicorn app.main:app --app-dir server`
+- **Health check:** `/api/v1/health`
+- Set `LLM_API_KEY` and `SESSION_SECRET` in the Render dashboard (marked `sync: false`, never stored in the repo).
 
-| 视图 | 内容 |
+SQLite lives on the instance filesystem; on the free tier it resets on redeploy/spin-down, which is acceptable for the demo deployment (accounts re-seed via the Demo Mailbox flow).
+
+## Product map
+
+| Page | What it does |
 | --- | --- |
-| 今日简报 | 夜间小结、决策队列、进行中任务、已完成动态、活动日志 |
-| 委托 | 意图输入 + 示例、自动生成的分步计划、授权范围选择、启动任务 |
-| 任务进度 | 实时时间线、语气二选一的决策点、暂停 / 接管 / 终止、结果与产出操作 |
-| 待审阅 | Agent 草稿队列：展开、编辑、批准发送、丢弃 |
-| 收件箱 | 传统邮件列表 + 阅读窗格、搜索过滤、手动回复、交给 Agent |
+| Today Briefing | Overnight summary, decision cards, active tasks, recent mail and activity |
+| Delegate | Goal + context selection, Agent conversation (SSE), plan confirmation, authorization level |
+| Task Progress | Live task timeline over WebSocket, step gates, pause / take over / terminate, outputs |
+| Review Queue | Every Agent draft: edit, approve & send (simulated in Demo), reject, return to task |
+| Inbox | Threads and messages, read/star, reply/forward, hand-off to the Agent, compose |
+| Archive | Archived messages, searchable, restorable to the Inbox |
+| Automations | Scheduled rules (briefing digest, invoice watcher) with run history |
+| Settings | Profile, appearance (Day/Night, persisted server-side), Agent defaults, notifications, privacy, mailboxes, sessions, contacts, to-dos |
 
-## 说明
+Authorization levels, enforced server-side per task: **Confirm Every Step**, **Confirm at Key Milestones**, **Fully Automatic but Confirm Before Sending** — and even in the last mode, sending only ever happens from the Review Queue.
 
-- 模拟执行节奏：任务步骤约每 1.8 秒推进一步；简报中另有两个展示用任务进度条。
-- 所有人名、公司、金额、邮件内容均为虚构。
-- 本原型为前端设计演示：发送、归档等动作只改变本地状态，不连接任何真实邮箱服务。
+## Design system
+
+Black/white base with a single blue accent (#2563EB), macaron khaki for neutral status tints, Inter + Noto Sans SC, Day/Night themes persisted per account. Decorative artwork is generated transparent PNG (galaxy/orbit motifs); no purple anywhere.
+
+All people, companies, amounts and messages in the seed data are fictional.

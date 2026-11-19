@@ -74,7 +74,7 @@ export default function Inbox() {
     ];
     if (folder !== 'drafts') {
       jobs.push(
-        api<{ items: MailMessage[] }>(`/api/v1/mail/messages?folder=${folder}&limit=100`).then(
+        api<{ items: MailMessage[] }>(`/api/v1/emails?folder=${folder}&limit=100`).then(
           (d) => alive && setMessages(d.items),
         ),
       );
@@ -101,18 +101,18 @@ export default function Inbox() {
       return;
     }
     let alive = true;
-    api<{ message: MailMessage }>(`/api/v1/mail/messages/${selectedId}`)
+    api<{ message: MailMessage }>(`/api/v1/emails/${selectedId}`)
       .then((d) => {
         if (!alive) return;
         setDetail(d.message);
         if (!d.message.is_read) {
-          api(`/api/v1/mail/messages/${selectedId}/read-state`, {
+          api(`/api/v1/emails/${selectedId}/read-state`, {
             method: 'POST',
             body: { is_read: true },
           })
             .then(() => {
               refreshBadges();
-              setMessages((prev) => prev.map((m) => (m.id === selectedId ? { ...m, is_read: true } : m)));
+              setMessages((prev) => prev.map((x) => (x.id === selectedId ? { ...x, is_read: true } : x)));
             })
             .catch(() => {});
         }
@@ -151,21 +151,23 @@ export default function Inbox() {
   const handoff = async () => {
     if (!detail) return;
     try {
-      const r = await api<{ conversation: any; preview: any }>(
-        `/api/v1/mail/messages/${detail.id}/hand-off`,
+      const r = await api<{ conversation: any; context_preview: any }>(
+        `/api/v1/emails/${detail.id}/hand-off`,
         { method: 'POST', body: {} },
       );
-      toast({ text: `Agent conversation started: “${r.preview.title}”. Continue in Delegate Work.` });
+      toast({
+        text: `Agent conversation started for “${r.context_preview.subject}” (${r.context_preview.message_count} message(s) of context). Continue in Delegate Work.`,
+      });
       navigate('/delegate');
     } catch (e) {
       toast({ text: errorText(e), error: true });
     }
   };
 
-  const threadMessages = useMemo(() => {
-    if (!detail) return [];
-    return messages.filter((m) => m.thread_id === detail.thread_id);
-  }, [detail, messages]);
+  const senderLabel = (msg: MailMessage) =>
+    msg.is_sent
+      ? `To: ${msg.to_recipients.map((r) => r.name ?? r.email).join(', ')}`
+      : (msg.from_name ?? msg.from_address);
 
   return (
     <div className="view" style={{ maxWidth: 1380 }}>
@@ -205,13 +207,11 @@ export default function Inbox() {
             <span className="folder-label">Trash</span>
           </button>
           <div className="pane-divider" />
-          <div className="pane-title">Labels</div>
-          {['needs-reply', 'invoice', 'scheduling', 'partnership', 'security', 'newsletter'].map((l) => (
-            <span key={l} className="tag-row" style={{ cursor: 'default' }}>
-              <span className="tag-dot" style={{ background: 'var(--khaki)' }} />
-              {l}
-            </span>
-          ))}
+          <div className="pane-title">About this mailbox</div>
+          <span className="tag-row" style={{ cursor: 'default' }}>
+            <span className="tag-dot" style={{ background: 'var(--khaki)' }} />
+            Demo data — sends are simulated
+          </span>
         </aside>
 
         <section className="panel list-pane">
@@ -231,7 +231,7 @@ export default function Inbox() {
                   <span className="mail-avatar">Dr</span>
                   <span className="mail-main">
                     <span className="mail-row-top">
-                      <span className="mail-from">{d.to.map((r) => r.name ?? r.email).join(', ') || '(no recipient)'}</span>
+                      <span className="mail-from">{d.to_recipients.map((r) => r.name ?? r.email).join(', ') || '(no recipient)'}</span>
                       <span className="mail-time">{fmtTime(d.updated_at)}</span>
                     </span>
                     <span className="mail-subject">{d.subject || '(no subject)'}</span>
@@ -244,20 +244,20 @@ export default function Inbox() {
           {!loading && folder !== 'drafts' && (
             <div className="mail-list">
               {messages.length === 0 && <div className="empty-mini">Nothing in this folder.</div>}
-              {messages.map((m) => (
-                <button key={m.id} className={`mail-row${selectedId === m.id ? ' active' : ''}`} onClick={() => setSelectedId(m.id)}>
-                  <span className="mail-avatar">{initials(m.from.name ?? m.from.email)}</span>
+              {messages.map((msg) => (
+                <button key={msg.id} className={`mail-row${selectedId === msg.id ? ' active' : ''}`} onClick={() => setSelectedId(msg.id)}>
+                  <span className="mail-avatar">{initials(msg.from_name ?? msg.from_address)}</span>
                   <span className="mail-main">
                     <span className="mail-row-top">
-                      <span className="mail-from" style={m.is_read ? { fontWeight: 500 } : undefined}>
-                        {m.direction === 'outbound' ? `To: ${m.to.map((r) => r.name ?? r.email).join(', ')}` : (m.from.name ?? m.from.email)}
+                      <span className="mail-from" style={msg.is_read ? { fontWeight: 500 } : undefined}>
+                        {senderLabel(msg)}
                       </span>
-                      <span className="mail-time">{fmtTime(m.created_at)}</span>
+                      <span className="mail-time">{fmtTime(msg.created_at)}</span>
                     </span>
-                    <span className="mail-subject">{m.subject}</span>
-                    <span className="mail-snippet">{m.snippet}</span>
+                    <span className="mail-subject">{msg.subject}</span>
+                    <span className="mail-snippet">{msg.snippet}</span>
                   </span>
-                  {!m.is_read && <span className="unread-dot" />}
+                  {!msg.is_read && <span className="unread-dot" />}
                 </button>
               ))}
             </div>
@@ -277,18 +277,15 @@ export default function Inbox() {
               <h2 className="read-subject">{detail.subject}</h2>
               <div className="read-pills">
                 <EnvLabel env={detail.environment} />
-                {detail.labels.map((l) => (
-                  <span key={l} className="pill pill-khaki">{l}</span>
-                ))}
-                {detail.importance === 'high' && <span className="pill pill-danger">High importance</span>}
-                {detail.has_attachments && <span className="pill pill-neutral">Has attachments</span>}
+                {detail.has_attachment && <span className="pill pill-neutral">Has attachments</span>}
+                {detail.is_starred && <span className="pill pill-khaki">Starred</span>}
               </div>
               <div className="read-meta">
-                <span className="mail-avatar">{initials(detail.from.name ?? detail.from.email)}</span>
+                <span className="mail-avatar">{initials(detail.from_name ?? detail.from_address)}</span>
                 <span className="read-meta-main">
-                  <span className="read-from">{detail.from.name ?? detail.from.email}</span>
+                  <span className="read-from">{detail.from_name ?? detail.from_address}</span>
                   <span className="read-sub">
-                    {detail.from.email} · to {detail.to.map((r) => r.name ?? r.email).join(', ')} · {fmtDateTime(detail.created_at)}
+                    {detail.from_address} · to {detail.to_recipients.map((r) => r.name ?? r.email).join(', ')} · {fmtDateTime(detail.created_at)}
                   </span>
                 </span>
                 <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
@@ -297,7 +294,7 @@ export default function Inbox() {
                     aria-label={detail.is_starred ? 'Unstar' : 'Star'}
                     onClick={() =>
                       act(
-                        () => api(`/api/v1/mail/messages/${detail.id}/star`, { method: 'POST', body: { is_starred: !detail.is_starred } }),
+                        () => api(`/api/v1/emails/${detail.id}/star`, { method: 'POST', body: { is_starred: !detail.is_starred } }),
                         detail.is_starred ? 'Star removed.' : 'Starred.',
                       )
                     }
@@ -307,21 +304,21 @@ export default function Inbox() {
                   <button
                     className="icon-btn"
                     aria-label="Archive thread"
-                    onClick={() => act(() => api(`/api/v1/mail/threads/${detail.thread_id}/archive`, { method: 'POST', body: {} }), 'Thread archived.', true)}
+                    onClick={() => act(() => api(`/api/v1/threads/${detail.thread_id}/archive`, { method: 'POST', body: {} }), 'Thread archived.', true)}
                   >
                     <Archive size={16} />
                   </button>
                   <button
                     className="icon-btn"
                     aria-label="Move to trash"
-                    onClick={() => act(() => api(`/api/v1/mail/messages/${detail.id}/trash`, { method: 'POST', body: {} }), 'Moved to trash.', true)}
+                    onClick={() => act(() => api(`/api/v1/emails/${detail.id}`, { method: 'DELETE' }), 'Moved to trash.', true)}
                   >
                     <Trash2 size={16} />
                   </button>
                 </span>
               </div>
               <div className="read-body">
-                {detail.body_text.split('\n\n').map((p, i) => (
+                {(detail.body_text ?? '').split('\n\n').map((p, i) => (
                   <p key={i}>{p}</p>
                 ))}
               </div>
@@ -337,11 +334,6 @@ export default function Inbox() {
                   </div>
                 </div>
               )}
-              {threadMessages.length > 1 && (
-                <p className="panel-foot-note">
-                  This thread has {threadMessages.length} messages in this folder. The Agent hand-off includes the full thread.
-                </p>
-              )}
               <div className="btn-row read-actions">
                 <button className="btn btn-primary" onClick={() => openComposer({ mode: 'reply', messageId: detail.id, onDone: reload })}>
                   <Reply size={14} /> Reply
@@ -352,7 +344,7 @@ export default function Inbox() {
                 <button className="btn btn-dark" onClick={() => openComposer({ mode: 'forward', messageId: detail.id, onDone: reload })}>
                   <Forward size={14} /> Forward
                 </button>
-                <button className="btn btn-ghost" onClick={() => act(() => api(`/api/v1/mail/messages/${detail.id}/read-state`, { method: 'POST', body: { is_read: false } }), 'Marked as unread.')}>
+                <button className="btn btn-ghost" onClick={() => act(() => api(`/api/v1/emails/${detail.id}/read-state`, { method: 'POST', body: { is_read: false } }), 'Marked as unread.')}>
                   <CornerUpLeft size={14} /> Mark unread
                 </button>
               </div>

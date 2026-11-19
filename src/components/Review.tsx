@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Mail, RotateCcw, ShieldAlert, Sparkles } from 'lucide-react';
+import { Mail, RotateCcw, Sparkles } from 'lucide-react';
 import { api, type ReviewItem } from '../lib/api';
 import { useApp } from '../lib/appctx';
 import {
@@ -17,8 +17,7 @@ import { StatusPill } from './TaskProgress';
 const FILTERS = [
   { id: 'pending', label: 'Pending' },
   { id: 'modified', label: 'Edited by you' },
-  { id: 'approved', label: 'Approved' },
-  { id: 'sent', label: 'Sent (simulated)' },
+  { id: 'approved', label: 'Approved & sent' },
   { id: 'rejected', label: 'Rejected' },
   { id: 'all', label: 'All' },
 ] as const;
@@ -50,12 +49,12 @@ export default function Review() {
       return;
     }
     let alive = true;
-    api<{ item: ReviewItem }>(`/api/v1/review/${selected.id}`)
+    api<{ review_item: ReviewItem }>(`/api/v1/review/${selected.id}`)
       .then((d) => {
         if (!alive) return;
-        setDetail(d.item);
-        setBody(d.item.draft.body_text);
-        setSubject(d.item.draft.subject);
+        setDetail(d.review_item);
+        setBody(d.review_item.draft.body_text);
+        setSubject(d.review_item.draft.subject);
         setNotice(null);
       })
       .catch((e) => toast({ text: errorText(e), error: true }));
@@ -86,29 +85,27 @@ export default function Review() {
   const saveEdits = () =>
     run(async () => {
       if (!detail) return;
-      const r = await api<{ item: ReviewItem }>(`/api/v1/review/${detail.id}`, {
+      const r = await api<{ review_item: ReviewItem }>(`/api/v1/review/${detail.id}`, {
         method: 'PATCH',
-        body: { revision: detail.revision, subject, body_text: body },
+        body: { revision: detail.revision, draft_changes: { subject, body } },
       });
-      setDetail(r.item);
+      setDetail(r.review_item);
     }, 'Your edits were saved. The item is now marked as edited by you.');
 
   const approve = () =>
     run(async () => {
       if (!detail) return;
+      let revision = detail.revision;
       if (edited) {
-        const r = await api<{ item: ReviewItem }>(`/api/v1/review/${detail.id}`, {
+        const r = await api<{ review_item: ReviewItem }>(`/api/v1/review/${detail.id}`, {
           method: 'PATCH',
-          body: { revision: detail.revision, subject, body_text: body },
+          body: { revision, draft_changes: { subject, body } },
         });
-        return api(`/api/v1/review/${detail.id}/approve`, {
-          method: 'POST',
-          body: { revision: r.item.revision, confirm_send: true },
-        });
+        revision = r.review_item.revision;
       }
       return api(`/api/v1/review/${detail.id}/approve`, {
         method: 'POST',
-        body: { revision: detail.revision, confirm_send: true },
+        body: { revision, confirm_send: true },
       });
     });
 
@@ -164,7 +161,7 @@ export default function Review() {
                   <span className="queue-main">
                     <span className="queue-title">{item.draft.subject}</span>
                     <span className="queue-meta">
-                      To {item.draft.to.map((r) => r.name ?? r.email).join(', ')} · {timeAgo(item.created_at)}
+                      To {item.draft.to_recipients.map((r) => r.name ?? r.email).join(', ')} · {timeAgo(item.created_at)}
                     </span>
                     <span className="queue-foot">
                       <span className="queue-id">{item.task_display_id ?? 'Manual'}</span>
@@ -185,9 +182,8 @@ export default function Review() {
                     <h2 className="detail-subject">{detail.draft.subject}</h2>
                     <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
                       <StatusPill status={detail.status} />
-                      <span className="pill pill-neutral">Risk: {detail.risk_level}</span>
                       <EnvLabel env={detail.draft.environment} />
-                      {detail.task_display_id && (
+                      {detail.task_display_id && detail.task_id && (
                         <button className="pill pill-accent" style={{ border: 'none', cursor: 'pointer' }} onClick={() => navigate(`/tasks/${detail.task_id}`)}>
                           Task {detail.task_display_id}
                         </button>
@@ -199,7 +195,7 @@ export default function Review() {
                   <div className="draft-rows">
                     <div className="draft-row">
                       <span className="draft-row-label">To</span>
-                      <span>{detail.draft.to.map((r) => (r.name ? `${r.name} <${r.email}>` : r.email)).join(', ')}</span>
+                      <span>{detail.draft.to_recipients.map((r) => (r.name ? `${r.name} <${r.email}>` : r.email)).join(', ')}</span>
                     </div>
                     <div className="draft-row">
                       <span className="draft-row-label">Subject</span>
@@ -233,12 +229,6 @@ export default function Review() {
                     </span>
                   </div>
                 )}
-                {detail.risk_level !== 'low' && (
-                  <div className="agent-hint" style={{ background: 'var(--warn-bg)', color: 'var(--warn)' }}>
-                    <ShieldAlert size={15} />
-                    <span>This draft is marked {detail.risk_level} risk. Read it fully before approving.</span>
-                  </div>
-                )}
                 {notice && <div className="state-banner done">{notice}</div>}
 
                 {(detail.status === 'pending' || detail.status === 'modified') && (
@@ -269,7 +259,7 @@ export default function Review() {
                     )}
                   </div>
                 )}
-                {(detail.status === 'sent' || detail.status === 'approved') && (
+                {detail.status === 'approved' && (
                   <div className="state-banner done" style={{ marginTop: 16 }}>
                     {detail.draft.environment === 'demo'
                       ? 'Simulated send — no external email was delivered. The message is stored in Sent.'

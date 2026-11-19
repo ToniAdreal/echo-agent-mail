@@ -41,7 +41,7 @@ export default function Topbar() {
   const searchRef = useRef<HTMLDivElement>(null);
 
   const loadAccounts = () =>
-    api<{ items: MailAccount[] }>('/api/v1/mail-accounts')
+    api<{ items: MailAccount[] }>('/api/v1/accounts')
       .then((d) => setAccounts(d.items))
       .catch(() => {});
   const loadNotifications = () =>
@@ -86,7 +86,7 @@ export default function Topbar() {
   }, [query]);
 
   const account = accounts[0];
-  const syncing = account?.sync_status === 'syncing';
+  const syncing = account?.status === 'syncing';
   const crumb = CRUMBS[route] ?? (route.startsWith('/tasks/') ? 'Task Progress' : 'Intenda');
 
   const openNotification = (n: Notification) => {
@@ -129,10 +129,10 @@ export default function Topbar() {
           </div>
           {searchFocus && results && (
             <div className="search-results">
-              {results.messages?.length > 0 && (
+              {results.items?.length > 0 && (
                 <>
                   <div className="pane-title">Messages</div>
-                  {results.messages.slice(0, 5).map((msg: any) => (
+                  {results.items.slice(0, 6).map((msg: any) => (
                     <button
                       key={msg.id}
                       className="menu-item"
@@ -145,49 +145,14 @@ export default function Topbar() {
                       <span style={{ flex: 1, minWidth: 0 }}>
                         <span style={{ display: 'block', fontWeight: 600 }}>{msg.subject}</span>
                         <span style={{ display: 'block', fontSize: 12, color: 'var(--t3)' }}>
-                          {msg.from.name ?? msg.from.email} · {fmtTime(msg.created_at)}
+                          {msg.from_name ?? msg.from_address} · {fmtTime(msg.created_at)}
                         </span>
                       </span>
                     </button>
                   ))}
                 </>
               )}
-              {results.tasks?.length > 0 && (
-                <>
-                  <div className="pane-title">Tasks</div>
-                  {results.tasks.slice(0, 5).map((t: any) => (
-                    <button
-                      key={t.id}
-                      className="menu-item"
-                      onClick={() => {
-                        setSearchFocus(false);
-                        setQuery('');
-                        navigate(`/tasks/${t.id}`);
-                      }}
-                    >
-                      <span className="mono" style={{ fontSize: 12 }}>
-                        {t.display_id}
-                      </span>
-                      <span style={{ flex: 1 }}>{t.title}</span>
-                    </button>
-                  ))}
-                </>
-              )}
-              {results.contacts?.length > 0 && (
-                <>
-                  <div className="pane-title">People</div>
-                  {results.contacts.slice(0, 5).map((c: any) => (
-                    <div key={c.id} className="menu-item" style={{ cursor: 'default' }}>
-                      <span style={{ flex: 1 }}>
-                        {c.name} <span style={{ color: 'var(--t3)' }}>{c.email}</span>
-                      </span>
-                    </div>
-                  ))}
-                </>
-              )}
-              {!results.messages?.length && !results.tasks?.length && !results.contacts?.length && (
-                <div className="empty-mini">No results for “{query}”.</div>
-              )}
+              {!results.items?.length && <div className="empty-mini">No messages match “{query}”.</div>}
             </div>
           )}
         </div>

@@ -28,7 +28,7 @@ const ACTION_LABEL: Record<string, string> = {
 interface RunRecord {
   id: string;
   status: string;
-  result: any;
+  result_payload: any;
   started_at: string;
 }
 
@@ -113,7 +113,7 @@ export default function Automations() {
                     {a.actions.map((x) => ACTION_LABEL[x.type] ?? x.type).join(', ')}
                   </span>
                   <span className="list-row-meta" style={{ display: 'block' }}>
-                    Last run: {a.last_run_at ? `${fmtDateTime(a.last_run_at)} (${a.last_run_status ?? ''})` : 'never'}
+                    Last run: {a.last_run_at ? fmtDateTime(a.last_run_at) : 'never'}
                   </span>
                 </span>
                 {a.enabled ? <span className="pill pill-ok">Enabled</span> : <span className="pill pill-neutral">Disabled</span>}
@@ -202,8 +202,8 @@ export default function Automations() {
                 <div key={r.id} className="feed-item">
                   <span className="feed-text">
                     <StatusPill status={r.status} />{' '}
-                    {r.result?.matched !== undefined ? `${r.result.matched} matched` : ''}
-                    {r.result?.note ? ` — ${r.result.note}` : ''}
+                    {r.result_payload?.matched !== undefined ? `${r.result_payload.matched} matched` : ''}
+                    {r.result_payload?.note ? ` — ${r.result_payload.note}` : ''}
                   </span>
                   <span className="feed-time">{fmtDateTime(r.started_at)}</span>
                 </div>

@@ -211,10 +211,15 @@ async def _process_task(db, task: m.Task) -> None:
         await tasks_svc.emit_task_event_async(db, task, "task.completed", {"completed_at": m.now().isoformat()})
         return
 
-    # Handle a send step that is waiting on a Review Queue decision.
+    # Handle a send step that is waiting on a Review Queue decision. This
+    # applies only once the send step is current: it already carries a
+    # review_id (linked when its draft step completed) or is parked. A send
+    # step that is merely later in the plan must not block earlier steps.
     for step in steps:
         if step.step_type == "send_email" and step.status in {"waiting_user", "pending", "ready"}:
             review_id = (step.input_refs or {}).get("review_id")
+            if review_id is None and step.status != "waiting_user":
+                continue
             item = db.get(m.ReviewItem, review_id) if review_id else None
             if item is not None and item.status in {"approved", "sent"}:
                 step.status = "completed"
@@ -318,6 +323,13 @@ async def _process_task(db, task: m.Task) -> None:
         await tasks_svc.emit_task_event_async(db, task, "task.step.completed",
                                               {"step_id": nxt.id, "output_refs": output})
         if "review_id" in output:
+            # Link the review to the plan's send step so the Review Queue
+            # gate controls exactly that step.
+            for s in steps:
+                if s.step_type == "send_email" and s.status in {"pending", "ready"}:
+                    s.input_refs = {**(s.input_refs or {}), "review_id": output["review_id"]}
+                    db.commit()
+                    break
             await tasks_svc.emit_task_event_async(db, task, "task.output.created", {
                 "output_type": "draft", "output_id": output.get("draft_id"), "review_id": output["review_id"],
             })

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, Loader2, Mail } from 'lucide-react';
-import { api, type OnboardingStatus } from '../lib/api';
+import { api, type OnboardingStatus, type SyncJob } from '../lib/api';
 import { ErrorCard, navigate } from '../lib/ui';
 
 const STEP_DEFS = [
@@ -23,6 +23,7 @@ function Steps({ done }: { done: number }) {
 
 export default function Onboarding({ onReady }: { onReady: () => void }) {
   const [status, setStatus] = useState<OnboardingStatus | null>(null);
+  const [job, setJob] = useState<SyncJob | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const [oauthNote, setOauthNote] = useState<string | null>(null);
@@ -32,6 +33,10 @@ export default function Onboarding({ onReady }: { onReady: () => void }) {
     try {
       const s = await api<OnboardingStatus>('/api/v1/onboarding/status');
       setStatus(s);
+      if (s.state === 'SYNCING' || s.state === 'SYNC_FAILED') {
+        const sj = await api<{ jobs: SyncJob[] }>('/api/v1/sync/status').catch(() => null);
+        if (sj?.jobs?.length) setJob(sj.jobs[sj.jobs.length - 1]);
+      }
       return s;
     } catch (e) {
       setError(e);
@@ -74,13 +79,16 @@ export default function Onboarding({ onReady }: { onReady: () => void }) {
     );
   }
 
+  const demoAddress = status.mail_accounts[0]?.email_address ?? null;
+  const percent = status.state === 'READY' ? 100 : (job?.percent ?? 0);
+
   const chooseDemo = async () => {
     setBusy(true);
     setError(null);
     try {
       await api('/api/v1/onboarding/mailbox-choice', { method: 'POST', body: { choice: 'demo' } });
-      const s = await api<OnboardingStatus>('/api/v1/onboarding/demo-mailbox', { method: 'POST', body: {} });
-      setStatus(s);
+      await api('/api/v1/onboarding/demo-mailbox', { method: 'POST', body: {} });
+      await load();
     } catch (e) {
       setError(e);
     } finally {
@@ -99,12 +107,11 @@ export default function Onboarding({ onReady }: { onReady: () => void }) {
         body: { return_to: '/onboarding' },
       });
       window.location.href = r.authorization_url;
-    } catch (e) {
+    } catch {
       // Provider not configured in this deployment: explain and offer Demo.
       setOauthNote(
         'Live mailbox connection is not configured in this deployment yet. You can explore the full product now with the Demo Mailbox — every workflow runs for real inside Intenda.',
       );
-      setError(null);
       setBusy(false);
     }
   };
@@ -112,8 +119,8 @@ export default function Onboarding({ onReady }: { onReady: () => void }) {
   const retrySync = async () => {
     setBusy(true);
     try {
-      const s = await api<OnboardingStatus>('/api/v1/onboarding/retry', { method: 'POST', body: {} });
-      setStatus(s);
+      await api('/api/v1/onboarding/retry', { method: 'POST', body: {} });
+      await load();
     } catch (e) {
       setError(e);
     } finally {
@@ -193,22 +200,21 @@ export default function Onboarding({ onReady }: { onReady: () => void }) {
           <>
             <h1 className="auth-title">{status.state === 'SYNC_FAILED' ? 'Sync needs attention' : 'Setting up your mailbox'}</h1>
             <p className="auth-sub">
-              {status.demo_mailbox_address ? (
+              {demoAddress ? (
                 <>
-                  Demo mailbox <strong>{status.demo_mailbox_address}</strong> — simulated data, clearly labelled everywhere.
+                  Demo mailbox <strong>{demoAddress}</strong> — simulated data, clearly labelled everywhere.
                 </>
               ) : (
                 'Importing your mailbox.'
               )}
             </p>
             <span className="progress progress-lg">
-              <span className="progress-bar" style={{ width: `${status.sync?.percent ?? 0}%` }} />
+              <span className="progress-bar" style={{ width: `${percent}%` }} />
             </span>
             <div className="sync-list">
               {STEP_DEFS.map((s, i) => {
-                const pct = status.sync?.percent ?? 0;
-                const done = pct >= (i + 1) * 20;
-                const active = !done && pct >= i * 20 && status.state === 'SYNCING';
+                const done = percent >= (i + 1) * 20;
+                const active = !done && percent >= i * 20 && status.state === 'SYNCING';
                 return (
                   <div key={s.key} className={`sync-row${done ? ' done' : ''}${active ? ' active' : ''}`}>
                     <span className="sync-ic">
@@ -217,7 +223,7 @@ export default function Onboarding({ onReady }: { onReady: () => void }) {
                     <span>{s.label}</span>
                     {s.key === 'history_import' && (
                       <span className="sync-count">
-                        {status.sync?.imported_count ?? 0} / {status.sync?.total_estimate ?? 0}
+                        {job?.processed_count ?? 0} / {job?.total_count ?? 0}
                       </span>
                     )}
                   </div>
@@ -250,8 +256,8 @@ export default function Onboarding({ onReady }: { onReady: () => void }) {
             <img className="auth-art only-day" src="assets/mailbox-connect-light.png" alt="" />
             <h1 className="auth-title">Your mailbox is ready</h1>
             <p className="auth-sub">
-              {status.sync?.imported_count ?? 0} messages imported
-              {status.demo_mailbox_address ? ` into ${status.demo_mailbox_address}` : ''}. Your first briefing is ready.
+              {job?.total_count ?? 38} messages imported
+              {demoAddress ? ` into ${demoAddress}` : ''}. Your first briefing is ready.
             </p>
             <button
               className="btn btn-primary btn-block btn-lg"
