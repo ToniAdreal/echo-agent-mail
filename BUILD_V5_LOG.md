@@ -55,3 +55,34 @@ Build follows BUILD_BRIEF_V5.md (process) and Intenda-Product-Specification-v1.0
   configured the callback path is unreachable in this deployment.
 - Database schema is created with SQLAlchemy `create_all` (Postgres-ready
   types/constraints); Alembic migrations are not included in the demo scope.
+
+## Stage 2 — email + briefing APIs (done)
+- Email endpoints (spec 7.4.5): list with folder filters (inbox/sent/drafts/
+  starred/archive/trash), read with attachments, compose, reply/reply-all,
+  forward, send (confirm_send required, revision check 409, idempotency-key
+  honored, demo sends simulated and labelled with the exact spec notice),
+  archive, trash, restore, read-state, star, hand-off to Agent (creates or
+  reuses a conversation with only the selected thread as context and returns
+  the handoff preview from spec 4.7).
+- Threads: list with unread counts, detail with messages + attachments,
+  read-state, archive. Search: free text + sender/unread/date/attachment
+  filters with ownership enforced. Drafts: list/create/get/PATCH with
+  revision conflict 409 returning the latest draft, delete. Archive: list
+  with filters + restore.
+- Briefing (spec 7.4.4): metrics (new mail, needs decision, in progress,
+  delivered, sent), decision cards merged from pending Review Queue items
+  and pending task decisions, active tasks, recent messages, recent audit
+  activity, open to-dos, and sidebar badge counts.
+- Verified with TestClient on a scratch DB: briefing metrics match the seed
+  (8 unread, 3 decisions, 3 active tasks, 2 delivered), inbox threads 11,
+  Acme thread 4 messages + 1 attachment, search "invoice" 3 hits, compose ->
+  send revision conflict 409 then simulated send 200, sent folder grows,
+  archive/restore round-trip, draft PATCH conflict 409, hand-off preview,
+  cross-user message access returns 404.
+
+### Stage 2 deviations / interpretation notes
+- Archiving a message archives its thread (the schema stores archive state
+  at thread level, spec 4.8); the Archive page lists messages of archived
+  threads.
+- Compose/reply/forward create a draft plus a backing draft message so the
+  inventory's `POST /emails/{messageId}/send` shape works unchanged.

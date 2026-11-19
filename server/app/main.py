@@ -95,10 +95,14 @@ def create_app() -> FastAPI:
         return await call_next(request)
 
     from .routes import auth as auth_routes
+    from .routes import briefing as briefing_routes
+    from .routes import mail as mail_routes
     from .routes import onboarding as onboarding_routes
 
     app.include_router(auth_routes.router)
     app.include_router(onboarding_routes.router)
+    app.include_router(mail_routes.router)
+    app.include_router(briefing_routes.router)
 
     @app.get("/health")
     def health():
