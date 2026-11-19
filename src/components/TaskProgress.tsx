@@ -29,7 +29,7 @@ interface Props {
 const STATUS_META: Record<TaskStatus, { label: string; cls: string; sentence: string }> = {
   running: { label: '进行中', cls: 'pill-accent', sentence: 'Agent 正在执行，步骤完成后自动推进' },
   waiting: { label: '停在决策点', cls: 'pill-warn', sentence: '执行已暂停，等待你的决定' },
-  paused: { label: '已暂停', cls: 'pill-neutral', sentence: '任务已暂停，等待你继续' },
+  paused: { label: '已暂停', cls: 'pill-khaki', sentence: '任务已暂停，等待你继续' },
   takenover: { label: '已转为手动', cls: 'pill-info', sentence: '已转为手动处理，Agent 已停止' },
   done: { label: '已完成', cls: 'pill-ok', sentence: '全部步骤已完成' },
   cancelled: { label: '已终止', cls: 'pill-danger', sentence: '任务已终止，未发送任何内容' },
@@ -48,6 +48,8 @@ export default function TaskProgress({ task, resolveGate, control, finalAction, 
           <p className="view-sub">还没有正在执行的任务。</p>
         </header>
         <div className="empty-card">
+          <img className="empty-motif only-night" src="assets/asset_orbit_motif.png" alt="" aria-hidden="true" />
+          <img className="empty-motif only-day" src="assets/asset_orbit_motif_day.png" alt="" aria-hidden="true" />
           去「委托」页告诉 Agent 你想达成什么结果，任务会在这里实时推进。
           <div className="btn-row" style={{ marginTop: 14 }}>
             <button className="btn btn-primary" onClick={goDelegate}>
@@ -144,9 +146,9 @@ export default function TaskProgress({ task, resolveGate, control, finalAction, 
                     ) : task.status === 'running' ? (
                       <span className="pill pill-accent">执行中</span>
                     ) : (
-                      <span className="pill pill-neutral">当前步</span>
+                      <span className="pill pill-khaki">当前步</span>
                     ))}
-                  {state === 'todo' && <span className="pill pill-neutral">待执行</span>}
+                  {state === 'todo' && <span className="pill pill-khaki">待执行</span>}
                 </li>
               );
             })}
@@ -241,7 +243,7 @@ export default function TaskProgress({ task, resolveGate, control, finalAction, 
                   <span className="draft-row-label">主题</span>
                   <span>
                     {task.plan.draftSubject}
-                    {task.tone && <span className="pill pill-neutral draft-tone-pill">{task.tone === 'formal' ? '正式版' : '简洁版'}</span>}
+                    {task.tone && <span className="pill pill-khaki draft-tone-pill">{task.tone === 'formal' ? '正式版' : '简洁版'}</span>}
                   </span>
                 </div>
               </div>

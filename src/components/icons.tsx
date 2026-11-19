@@ -167,13 +167,30 @@ export function IconPlus({ size = 18 }: IconProps) {
   );
 }
 
+export function IconSun({ size = 18 }: IconProps) {
+  return (
+    <svg {...base(size)}>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2.5v2.4M12 19.1v2.4M2.5 12h2.4M19.1 12h2.4M5 5l1.7 1.7M17.3 17.3 19 19M19 5l-1.7 1.7M6.7 17.3 5 19" />
+    </svg>
+  );
+}
+
+export function IconMoon({ size = 18 }: IconProps) {
+  return (
+    <svg {...base(size)}>
+      <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z" />
+    </svg>
+  );
+}
+
 /** 简报决策卡与 hero 用的轨道标记（描边小图） */
 export function OrbitMark({ size = 34 }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 48 48" fill="none" aria-hidden="true">
       <ellipse cx="24" cy="24" rx="19" ry="8.5" transform="rotate(-24 24 24)" stroke="currentColor" strokeWidth="1.6" opacity="0.75" />
       <circle cx="24" cy="24" r="5.5" fill="currentColor" />
-      <circle cx="39.5" cy="13.5" r="2.4" fill="#F4F3F8" />
+      <circle cx="39.5" cy="13.5" r="2.4" fill="currentColor" opacity="0.85" />
     </svg>
   );
 }

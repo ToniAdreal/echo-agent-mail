@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ActivityEntry, Decision, DoneItem } from '../data';
 import { SeededTask } from '../App';
 import { TaskState } from './TaskProgress';
-import { IconArrowRight, IconCheck, OrbitMark } from './icons';
+import { IconArrowRight, IconCheck } from './icons';
 
 interface Props {
   decisions: Decision[];
@@ -26,19 +26,6 @@ const DECISION_TAGS = [
   { label: '需修改', cls: 'pill-danger' },
 ];
 const DOT_CLASSES = ['dot-gray', 'dot-accent', 'dot-ok'];
-
-function HeroOrbit() {
-  return (
-    <svg className="hero-orbit" width="360" height="210" viewBox="0 0 360 210" fill="none" aria-hidden="true">
-      <ellipse cx="215" cy="105" rx="150" ry="56" transform="rotate(-16 215 105)" stroke="#7865F0" strokeOpacity="0.4" />
-      <ellipse cx="215" cy="105" rx="118" ry="86" transform="rotate(24 215 105)" stroke="#9383FF" strokeOpacity="0.22" />
-      <circle cx="215" cy="105" r="34" fill="#2A2542" />
-      <circle cx="215" cy="105" r="17" fill="#7865F0" />
-      <circle cx="96" cy="140" r="4.5" fill="#F4F3F8" />
-      <circle cx="322" cy="58" r="3" fill="#9383FF" />
-    </svg>
-  );
-}
 
 export default function Briefing({
   decisions,
@@ -88,6 +75,9 @@ export default function Briefing({
       </header>
 
       <section className="hero">
+        <img className="hero-nebula" src="assets/asset_nebula_glow.png" alt="" aria-hidden="true" />
+        <img className="hero-art only-night" src="assets/asset_hero_orbit.png" alt="" aria-hidden="true" />
+        <img className="hero-art only-day" src="assets/asset_hero_orbit_day.png" alt="" aria-hidden="true" />
         <div className="hero-content">
           <div className="hero-kicker">WORK BRIEF · {MONTHS[now.getMonth()]} {now.getDate()}</div>
           <h2 className="hero-title">
@@ -105,7 +95,6 @@ export default function Briefing({
             </button>
           </div>
         </div>
-        <HeroOrbit />
       </section>
 
       <section className="stats-strip panel">
@@ -127,7 +116,11 @@ export default function Briefing({
             {decisions.length > 0 && <span className="pill pill-warn">{decisions.length} 项需确认</span>}
           </div>
           {decisions.length === 0 && (
-            <div className="empty-card">全部处理完了。Agent 会继续盯着新邮件，有需要决定的事会放在这里。</div>
+            <div className="empty-card">
+              <img className="empty-motif only-night" src="assets/asset_orbit_motif.png" alt="" aria-hidden="true" />
+              <img className="empty-motif only-day" src="assets/asset_orbit_motif_day.png" alt="" aria-hidden="true" />
+              全部处理完了。Agent 会继续盯着新邮件，有需要决定的事会放在这里。
+            </div>
           )}
           <div className="card-list">
             {decisions.map((d, i) => {
@@ -136,9 +129,8 @@ export default function Briefing({
               return (
                 <article key={d.id} className={`decision-card ${leaving === d.id ? 'leaving' : ''} ${open ? 'open' : ''}`}>
                   <button className="decision-main" onClick={() => setOpenId(open ? null : d.id)}>
-                    <span className="decision-icon">
-                      <OrbitMark size={32} />
-                    </span>
+                    <img className="decision-motif only-night" src="assets/asset_orbit_motif.png" alt="" aria-hidden="true" />
+                    <img className="decision-motif only-day" src="assets/asset_orbit_motif_day.png" alt="" aria-hidden="true" />
                     <span className="decision-main-text">
                       <span className="decision-title">{d.title}</span>
                       <span className="decision-desc">{d.recommendation}</span>

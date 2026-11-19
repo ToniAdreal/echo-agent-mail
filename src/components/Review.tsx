@@ -59,7 +59,7 @@ export default function Review({ drafts, draftAction }: Props) {
     if (item.kind === 'rejected') return <span className="pill pill-danger">已拒绝</span>;
     if (item.draft.status === 'sent') return <span className="pill pill-ok">已发送</span>;
     if (editedIds.includes(item.draft.id)) return <span className="pill pill-danger">需修改</span>;
-    return <span className="pill pill-warn">待批准</span>;
+    return <span className="pill pill-khaki">待批准</span>;
   };
 
   const doReject = () => {
@@ -112,7 +112,7 @@ export default function Review({ drafts, draftAction }: Props) {
         <section className="panel queue-panel">
           <div className="section-head">
             <h2>待处理事项</h2>
-            <span className="pill pill-warn">{list.length} 项</span>
+            <span className="pill pill-khaki">{list.length} 项</span>
           </div>
           <div className="queue-list">
             {list.length === 0 && <div className="empty-mini">这个分类下暂时没有草稿。</div>}
@@ -151,7 +151,7 @@ export default function Review({ drafts, draftAction }: Props) {
                 ) : selEdited ? (
                   <span className="pill pill-danger">需修改</span>
                 ) : (
-                  <span className="pill pill-warn">发送前审批</span>
+                  <span className="pill pill-khaki">发送前审批</span>
                 )}
               </div>
               <div className="detail-meta">

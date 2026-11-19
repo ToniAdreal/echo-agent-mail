@@ -36,8 +36,9 @@ export default function Sidebar({ view, setView, counts }: Props) {
     <aside className="sidebar">
       <div className="brand">
         <div className="brand-row">
-          {/* public/logo-silver.png，相对路径以适配 ./ base 部署 */}
-          <img className="brand-logo" src="logo-silver.png" alt="Intenda 标记" />
+          {/* 夜间用银色版、日间用近黑版，相对路径以适配 ./ base 部署 */}
+          <img className="brand-logo only-night" src="logo-silver.png" alt="Intenda 标记" />
+          <img className="brand-logo only-day" src="logo-dark.png" alt="Intenda 标记" />
           <span className="brand-name">Intenda</span>
           <span className="brand-cn">意达</span>
         </div>

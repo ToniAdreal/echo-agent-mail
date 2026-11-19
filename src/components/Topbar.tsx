@@ -1,5 +1,5 @@
 import { ViewKey } from '../data';
-import { IconBell, IconSearch } from './icons';
+import { IconBell, IconMoon, IconSearch, IconSun } from './icons';
 
 const CRUMBS: Record<ViewKey, string> = {
   briefing: '今日简报',
@@ -13,9 +13,11 @@ interface Props {
   view: ViewKey;
   query: string;
   onQuery: (q: string) => void;
+  theme: 'night' | 'day';
+  onToggleTheme: () => void;
 }
 
-export default function Topbar({ view, query, onQuery }: Props) {
+export default function Topbar({ view, query, onQuery, theme, onToggleTheme }: Props) {
   return (
     <div className="topbar">
       <div className="crumb">
@@ -33,6 +35,10 @@ export default function Topbar({ view, query, onQuery }: Props) {
             aria-label="搜索邮件"
           />
         </label>
+        <button className="theme-toggle" onClick={onToggleTheme} aria-label="切换日间 / 夜间模式">
+          {theme === 'night' ? <IconMoon size={16} /> : <IconSun size={16} />}
+          <span>{theme === 'night' ? '夜间' : '日间'}</span>
+        </button>
         <button className="icon-btn" aria-label="通知">
           <IconBell size={17} />
           <span className="bell-dot" />

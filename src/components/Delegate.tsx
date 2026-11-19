@@ -37,10 +37,19 @@ export default function Delegate({ prefill, onLaunch, hasActiveTask }: Props) {
         <p className="view-sub">像给同事交代工作一样告诉 Intenda 你的目标。</p>
       </header>
 
+      <div className="intent-ribbon">
+        <img className="only-night" src="assets/asset_intent_ribbon.png" alt="" aria-hidden="true" />
+        <img className="only-day" src="assets/asset_intent_ribbon_day.png" alt="" aria-hidden="true" />
+        <div className="intent-ribbon-text">
+          <span className="intent-ribbon-en">FROM INTENT TO DONE</span>
+          <span className="intent-ribbon-cn">说出意图，Agent 把它推进到结果</span>
+        </div>
+      </div>
+
       <section className="panel intent-card">
         <div className="intent-pills">
           <span className="pill pill-accent">自然语言委托</span>
-          {planned && <span className="pill pill-neutral">计划已生成</span>}
+          {planned && <span className="pill pill-khaki">计划已生成</span>}
           <span className="intent-hint">Agent 将自动理解历史邮件和关联上下文</span>
         </div>
         <textarea
@@ -143,7 +152,7 @@ export default function Delegate({ prefill, onLaunch, hasActiveTask }: Props) {
                     {s.gate ? (
                       <span className="pill pill-warn">等待授权</span>
                     ) : (
-                      <span className="pill pill-neutral">待执行</span>
+                      <span className="pill pill-khaki">待执行</span>
                     )}
                   </li>
                 ))}

@@ -40,6 +40,28 @@ export interface SeededTask {
 }
 
 export default function App() {
+  const [theme, setTheme] = useState<'night' | 'day'>(() => {
+    try {
+      return localStorage.getItem('intenda-theme') === 'day' ? 'day' : 'night';
+    } catch {
+      return 'night';
+    }
+  });
+
+  /* 主题落在 <html data-theme> 上驱动 CSS 变量，并持久化到 localStorage */
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      localStorage.setItem('intenda-theme', theme);
+    } catch {
+      /* 隐私模式下写入失败不影响使用 */
+    }
+  }, [theme]);
+
+  const toggleTheme = useCallback(() => {
+    setTheme((t) => (t === 'night' ? 'day' : 'night'));
+  }, []);
+
   const [view, setView] = useState<ViewKey>('briefing');
   const [decisions, setDecisions] = useState<Decision[]>(INITIAL_DECISIONS);
   const [drafts, setDrafts] = useState<Draft[]>(INITIAL_DRAFTS);
@@ -290,7 +312,7 @@ export default function App() {
     <div className="app">
       <Sidebar view={view} setView={setView} counts={counts} />
       <main className="main">
-        <Topbar view={view} query={inboxQuery} onQuery={handleTopQuery} />
+        <Topbar view={view} query={inboxQuery} onQuery={handleTopQuery} theme={theme} onToggleTheme={toggleTheme} />
         {view === 'briefing' && (
           <Briefing
             decisions={decisions}
