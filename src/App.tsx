@@ -16,6 +16,7 @@ import {
   buildPlan,
 } from './data';
 import Sidebar from './components/Sidebar';
+import Topbar from './components/Topbar';
 import Briefing from './components/Briefing';
 import Delegate from './components/Delegate';
 import TaskProgress, { TaskState } from './components/TaskProgress';
@@ -47,6 +48,7 @@ export default function App() {
   const [emails, setEmails] = useState<Email[]>(EMAILS);
   const [task, setTask] = useState<TaskState | null>(null);
   const [delegatePrefill, setDelegatePrefill] = useState('');
+  const [inboxQuery, setInboxQuery] = useState('');
   const [seeded, setSeeded] = useState<SeededTask[]>([
     { id: 's1', title: '整理本周会议邮件为待办', stepLabel: '正在提取时间与参会人', progress: 46, cap: 92 },
     { id: 's2', title: '汇总 10 月发票并核对金额', stepLabel: '正在核对第 3 张发票', progress: 68, cap: 95 },
@@ -56,6 +58,15 @@ export default function App() {
   const log = useCallback((text: string) => {
     setActivity((prev) => [{ id: nextId('a'), time: nowTime(), text }, ...prev]);
   }, []);
+
+  /* 顶栏搜索沿用收件箱的搜索行为：在其他视图输入时跳到收件箱看结果 */
+  const handleTopQuery = useCallback(
+    (q: string) => {
+      setInboxQuery(q);
+      if (q.trim() && view !== 'inbox') setView('inbox');
+    },
+    [view],
+  );
 
   /* 简报里两个进行中任务的进度缓慢推进（展示用） */
   useEffect(() => {
@@ -279,6 +290,7 @@ export default function App() {
     <div className="app">
       <Sidebar view={view} setView={setView} counts={counts} />
       <main className="main">
+        <Topbar view={view} query={inboxQuery} onQuery={handleTopQuery} />
         {view === 'briefing' && (
           <Briefing
             decisions={decisions}
@@ -289,6 +301,9 @@ export default function App() {
             activity={activity}
             goTask={() => setView('task')}
             goReview={() => setView('review')}
+            reviewCount={counts.review}
+            mailTotal={emails.length}
+            unreadCount={counts.unread}
           />
         )}
         {view === 'delegate' && (
@@ -306,7 +321,13 @@ export default function App() {
         )}
         {view === 'review' && <Review drafts={drafts} draftAction={draftAction} />}
         {view === 'inbox' && (
-          <Inbox emails={emails} markRead={markRead} delegateFromEmail={delegateFromEmail} log={log} />
+          <Inbox
+            emails={emails}
+            markRead={markRead}
+            delegateFromEmail={delegateFromEmail}
+            log={log}
+            query={inboxQuery}
+          />
         )}
       </main>
     </div>

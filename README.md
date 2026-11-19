@@ -13,7 +13,7 @@ npm run preview  # 预览构建产物
 
 技术栈：Vite + React + TypeScript，原生 CSS，无 UI 组件库。
 
-视觉系统为 Night Metal 深色金属夜间风：深色底（#0A0D10）、金属渐变与竖向拉丝纹理面板、银灰几何标记，强调色为 Deep Teal（#4C929B），功能与状态色全部采用低饱和色，字体为 Inter + Noto Sans SC，执行日志与数字使用 IBM Plex Mono。
+视觉系统为 V3 定稿：Galxe 式近黑界面（底色 #08090D）融合 Codex 式紧凑的信息组织，扁平深灰卡片加细边框，紫色（#7865F0）为唯一强调色，简报 hero 区使用紫色渐变，语义与状态色全部压低饱和度，银色标记与 Intenda 字标，字体为 Inter + Noto Sans SC。
 
 ## 产品概念
 

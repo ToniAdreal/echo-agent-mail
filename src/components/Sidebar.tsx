@@ -1,4 +1,15 @@
 import { ViewKey } from '../data';
+import {
+  IconArchive,
+  IconBolt,
+  IconGear,
+  IconGrid,
+  IconList,
+  IconMail,
+  IconPlus,
+  IconShieldCheck,
+  IconSparkle,
+} from './icons';
 
 interface Props {
   view: ViewKey;
@@ -6,78 +17,62 @@ interface Props {
   counts: { decisions: number; review: number; unread: number; taskActive: number };
 }
 
-const NAV: { key: ViewKey; label: string; hint: string }[] = [
-  { key: 'briefing', label: '今日简报', hint: 'Briefing' },
-  { key: 'delegate', label: '委托', hint: 'Delegate' },
-  { key: 'task', label: '任务进度', hint: 'Progress' },
-  { key: 'review', label: '待审阅', hint: 'Review' },
-  { key: 'inbox', label: '收件箱', hint: 'Inbox' },
+const WORKSPACE: { key: ViewKey; label: string; Icon: (p: { size?: number }) => JSX.Element }[] = [
+  { key: 'briefing', label: '今日简报', Icon: IconGrid },
+  { key: 'delegate', label: '委托工作', Icon: IconSparkle },
+  { key: 'task', label: '任务进度', Icon: IconList },
 ];
 
 export default function Sidebar({ view, setView, counts }: Props) {
-  const badge = (key: ViewKey): number => {
-    if (key === 'briefing') return counts.decisions;
-    if (key === 'review') return counts.review;
-    if (key === 'inbox') return counts.unread;
-    if (key === 'task') return counts.taskActive;
-    return 0;
-  };
+  const item = (key: ViewKey, label: string, Icon: (p: { size?: number }) => JSX.Element, badge = 0) => (
+    <button key={key} className={`nav-item ${view === key ? 'active' : ''}`} onClick={() => setView(key)}>
+      <Icon size={17} />
+      <span className="nav-label">{label}</span>
+      {badge > 0 && <span className="nav-badge">{badge}</span>}
+    </button>
+  );
 
   return (
     <aside className="sidebar">
       <div className="brand">
-        <div className="brand-mark" aria-hidden="true">
-          <svg width="46" height="30" viewBox="0 0 72 40" fill="none">
-            <defs>
-              <linearGradient id="intendaMetal" x1="0" y1="0" x2="0" y2="40" gradientUnits="userSpaceOnUse">
-                <stop offset="0" stopColor="#EDF1F4" />
-                <stop offset="0.45" stopColor="#C5CED3" />
-                <stop offset="1" stopColor="#8E9AA1" />
-              </linearGradient>
-            </defs>
-            <polygon points="13,7 25,20 13,33 1,20" fill="url(#intendaMetal)" />
-            <polygon points="30,29 38,26 51,4 57,14 68,19 59,22 54,33 49,23 41,27" fill="url(#intendaMetal)" />
-          </svg>
+        <div className="brand-row">
+          {/* public/logo-silver.png，相对路径以适配 ./ base 部署 */}
+          <img className="brand-logo" src="logo-silver.png" alt="Intenda 标记" />
+          <span className="brand-name">Intenda</span>
+          <span className="brand-cn">意达</span>
         </div>
-        <div className="brand-text">
-          <div className="brand-name">Intenda</div>
-          <div className="brand-sub">意达 · AGENT-NATIVE EMAIL</div>
-        </div>
+        <div className="brand-sub">AGENT-NATIVE EMAIL</div>
       </div>
 
+      <button className="new-delegate-btn" onClick={() => setView('delegate')}>
+        <IconPlus size={16} />
+        新建委托
+      </button>
+
       <nav className="nav">
-        {NAV.map((item) => (
-          <button
-            key={item.key}
-            className={`nav-item ${view === item.key ? 'active' : ''}`}
-            onClick={() => setView(item.key)}
-          >
-            <span className="nav-label">{item.label}</span>
-            <span className="nav-hint">{item.hint}</span>
-            {badge(item.key) > 0 && <span className="nav-badge">{badge(item.key)}</span>}
-          </button>
-        ))}
+        <div className="nav-group">WORKSPACE</div>
+        {WORKSPACE.map((n) => item(n.key, n.label, n.Icon))}
+        <div className="nav-group">COMMUNICATION</div>
+        {item('inbox', '收件箱', IconMail, counts.unread)}
+        {item('review', '待审阅', IconShieldCheck, counts.review)}
+        <div className="nav-item static">
+          <IconBolt size={17} />
+          <span className="nav-label">自动化</span>
+        </div>
+        <div className="nav-item static">
+          <IconArchive size={17} />
+          <span className="nav-label">归档</span>
+        </div>
       </nav>
 
       <div className="sidebar-foot">
-        <div className="autonomy-card">
-          <div className="autonomy-title">默认授权范围</div>
-          <div className="autonomy-row">
-            <span className="dot dot-green" /> 整理类：可自动执行
-          </div>
-          <div className="autonomy-row">
-            <span className="dot dot-amber" /> 起草类：发送前确认
-          </div>
-          <div className="autonomy-row">
-            <span className="dot dot-red" /> 承诺类：必须你决定
-          </div>
+        <div className="nav-item static">
+          <IconGear size={17} />
+          <span className="nav-label">设置</span>
         </div>
-        <div className="user-chip">
-          <div className="avatar">T</div>
-          <div>
-            <div className="user-name">Toni Adreal</div>
-            <div className="user-mail">toni@tokenta.space</div>
-          </div>
+        <div className="agent-status">
+          <span className="status-dot" />
+          Agent 已连接
         </div>
       </div>
     </aside>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { AUTONOMY_DESCS, AUTONOMY_LABELS, Autonomy, PRESET_INTENTS, buildPlan } from '../data';
+import { IconCalendar, IconFile, IconMail, IconPaperclip, IconShieldCheck } from './icons';
 
 interface Props {
   prefill: string;
@@ -31,32 +32,45 @@ export default function Delegate({ prefill, onLaunch, hasActiveTask }: Props) {
   return (
     <div className="view">
       <header className="view-head">
-        <h1>委托一件事</h1>
-        <p className="view-sub">
-          不用再一封封点开邮件。说清你想达成什么结果，Agent 会读上下文、列出计划、在你的授权范围内执行。
-        </p>
+        <div className="kicker">DELEGATE / TASK CREATION</div>
+        <h1>委托工作</h1>
+        <p className="view-sub">像给同事交代工作一样告诉 Intenda 你的目标。</p>
       </header>
 
-      <section className="delegate-card">
-        <label className="delegate-label" htmlFor="intent-input">
-          想达成什么结果？
-        </label>
-        <div className="intent-row">
-          <input
-            id="intent-input"
-            className="intent-input"
-            placeholder="例如：跟进上周没回复的客户询价"
-            value={intent}
-            onChange={(e) => setIntent(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') submit(intent);
-            }}
-          />
+      <section className="panel intent-card">
+        <div className="intent-pills">
+          <span className="pill pill-accent">自然语言委托</span>
+          {planned && <span className="pill pill-neutral">计划已生成</span>}
+          <span className="intent-hint">Agent 将自动理解历史邮件和关联上下文</span>
+        </div>
+        <textarea
+          id="intent-input"
+          className="intent-textarea"
+          rows={3}
+          placeholder="告诉 Agent 你想完成什么…"
+          value={intent}
+          onChange={(e) => setIntent(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              submit(intent);
+            }
+          }}
+        />
+        <div className="intent-foot">
+          <div className="chip-row">
+            <span className="ctx-chip">
+              <IconPaperclip size={14} />
+              {plan ? `收件对象：${plan.draftTo}` : '发送后自动关联上下文'}
+            </span>
+            {plan && <span className="ctx-chip">主题：{plan.draftSubject}</span>}
+          </div>
           <button className="btn btn-primary btn-lg" onClick={() => submit(intent)}>
-            生成计划
+            {planned ? '重新生成计划' : '发送指令'}
           </button>
         </div>
-        <div className="chip-row">
+        <div className="chip-row example-row">
+          <span className="example-label">快捷示例：</span>
           {PRESET_INTENTS.map((p) => (
             <button key={p} className="chip" onClick={() => submit(p)}>
               {p}
@@ -66,28 +80,84 @@ export default function Delegate({ prefill, onLaunch, hasActiveTask }: Props) {
       </section>
 
       {plan && planned && (
-        <section className="plan-card">
-          <div className="section-head">
-            <h2>Agent 的计划</h2>
-            <span className="section-note">目标：{planned}</span>
-          </div>
-          <ol className="plan-steps">
-            {plan.steps.map((s, i) => (
-              <li key={i} className="plan-step">
-                <span className="plan-num">{i + 1}</span>
-                <div>
-                  <div className="plan-step-label">
-                    {s.label}
-                    {s.gate === 'tone' && <span className="tag tag-wait">到这里会问你</span>}
-                  </div>
-                  <div className="plan-step-note">{s.note}</div>
+        <>
+          <div className="delegate-grid">
+            <section className="panel">
+              <div className="section-head">
+                <h2>Agent 读取的上下文</h2>
+                <span className="pill pill-accent">来源可追溯</span>
+              </div>
+              <div className="ctx-list">
+                <div className="ctx-item">
+                  <span className="ctx-icon">
+                    <IconMail size={17} />
+                  </span>
+                  <span className="ctx-main">
+                    <span className="ctx-title">{plan.draftTo} · 相关邮件线程</span>
+                    <span className="ctx-sub">{plan.steps[0].note}</span>
+                  </span>
                 </div>
-              </li>
-            ))}
-          </ol>
+                <div className="ctx-item">
+                  <span className="ctx-icon">
+                    <IconFile size={17} />
+                  </span>
+                  <span className="ctx-main">
+                    <span className="ctx-title">{plan.draftSubject}</span>
+                    <span className="ctx-sub">{plan.steps[1].note}</span>
+                  </span>
+                </div>
+                <div className="ctx-item">
+                  <span className="ctx-icon">
+                    <IconCalendar size={17} />
+                  </span>
+                  <span className="ctx-main">
+                    <span className="ctx-title">日程与既有承诺</span>
+                    <span className="ctx-sub">涉及时间与承诺的表述会与邮件原文逐项核对，不凭空添加。</span>
+                  </span>
+                </div>
+                <div className="ctx-item">
+                  <span className="ctx-icon">
+                    <IconShieldCheck size={17} />
+                  </span>
+                  <span className="ctx-main">
+                    <span className="ctx-title">授权边界</span>
+                    <span className="ctx-sub">外发动作将遵循下方所选的授权档位，超出范围立即停下。</span>
+                  </span>
+                </div>
+              </div>
+            </section>
 
-          <div className="autonomy-select">
-            <div className="autonomy-select-title">这次任务的授权范围</div>
+            <section className="panel">
+              <div className="section-head">
+                <h2>执行计划</h2>
+                <span className="pill pill-neutral">{plan.steps.length} 个步骤</span>
+              </div>
+              <ol className="plan-steps">
+                {plan.steps.map((s, i) => (
+                  <li key={i} className="plan-step">
+                    <span className="plan-num">{String(i + 1).padStart(2, '0')}</span>
+                    <div className="plan-step-main">
+                      <div className="plan-step-label">{s.label}</div>
+                      <div className="plan-step-note">{s.note}</div>
+                    </div>
+                    {s.gate ? (
+                      <span className="pill pill-warn">等待授权</span>
+                    ) : (
+                      <span className="pill pill-neutral">待执行</span>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            </section>
+          </div>
+
+          <section className="panel autonomy-panel">
+            <div className="autonomy-head">
+              <div>
+                <h2>授权范围</h2>
+                <p className="autonomy-desc">为当前委托设定 Agent 的执行权限，所选档位会真实决定任务在哪些节点停下。</p>
+              </div>
+            </div>
             <div className="autonomy-options">
               {(Object.keys(AUTONOMY_LABELS) as Autonomy[]).map((key) => (
                 <button
@@ -100,34 +170,15 @@ export default function Delegate({ prefill, onLaunch, hasActiveTask }: Props) {
                 </button>
               ))}
             </div>
-          </div>
-
-          <div className="btn-row">
-            <button className="btn btn-primary btn-lg" onClick={() => onLaunch(planned, autonomy)}>
-              启动任务
-            </button>
-            {hasActiveTask && <span className="warn-text">已有任务在进行中，启动新任务会替换它</span>}
-          </div>
-        </section>
+            <div className="autonomy-foot">
+              {hasActiveTask && <span className="warn-text">已有任务在进行中，启动新任务会替换它</span>}
+              <button className="btn btn-primary btn-lg" onClick={() => onLaunch(planned, autonomy)}>
+                开始执行
+              </button>
+            </div>
+          </section>
+        </>
       )}
-
-      <section className="delegate-explain">
-        <h2>委托和传统写邮件有什么不同</h2>
-        <div className="explain-grid">
-          <div className="explain-item">
-            <div className="explain-title">你说结果，它找上下文</div>
-            <p>Agent 会自己定位相关邮件、读完整个线程再动手，不需要你先翻出原信转发给它。</p>
-          </div>
-          <div className="explain-item">
-            <div className="explain-title">计划先行，随时可见</div>
-            <p>执行前先给出分步计划，执行中每一步都有简短的判断说明，不是黑盒。</p>
-          </div>
-          <div className="explain-item">
-            <div className="explain-title">授权有边界</div>
-            <p>每个任务单独设定授权范围。涉及对外承诺的步骤，永远停在你这里。</p>
-          </div>
-        </div>
-      </section>
     </div>
   );
 }
