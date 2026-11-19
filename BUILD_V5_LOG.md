@@ -140,3 +140,57 @@ Build follows BUILD_BRIEF_V5.md (process) and Intenda-Product-Specification-v1.0
   side effects from failed model requests) is fully honored for Agent chat.
 - Extra endpoint POST /automations/{id}/duplicate supports the spec's
   Automations page Duplicate action (not in the 7.4.9 inventory).
+
+## Stage 4 — frontend wired to the API (done)
+- New client layer: src/lib/api.ts (envelope-aware fetch with CSRF header,
+  SSE parser for Agent streaming, reconnecting WebSocket client, shared
+  types), src/lib/ui.tsx (history router, toasts, modal, skeletons,
+  formatting), src/lib/appctx.ts (session/theme/badges/composer context).
+- Auth pages (login, register, forgot/reset with demo token display) and a
+  full onboarding flow (provider choice, OAuth start with graceful
+  not-configured explanation, Demo Mailbox, polled sync progress with the
+  five spec stages, READY handoff to Today Briefing).
+- Shell: Sidebar now routes to all eight pages with live badges from the
+  briefing endpoint; the Appearance Day/Night control moved to the sidebar
+  bottom-left per spec 1.8 (icon + label + current mode, menu with radio
+  semantics, full keyboard support, immediate local apply + PATCH
+  /api/v1/settings persistence + localStorage cache; server value wins at
+  sign-in). The top bar no longer carries a theme toggle; it has live
+  search (messages/tasks/people), sync status, Compose, notifications
+  (new backend list/read endpoints) and the account menu.
+- All eight pages are API-driven with loading/empty/error states and no
+  dead buttons: Briefing (metrics, decision cards with approve/reject/
+  choose routing, agent activity, recent mail, to-dos), Delegate (goal,
+  context selection, streaming Agent chat with plan annotation, manual
+  plan builder, three authorization levels, Start execution), Task
+  Progress (list + detail with steps timeline, decision cards incl.
+  choose_option and free_text, pause/resume/takeover/return/terminate,
+  step retry), Inbox (folders incl. Drafts and Trash, read pane, star,
+  archive, reply/reply-all/forward via server reply drafts, hand-off to
+  Agent), Review Queue (filters, edit with revision control, approve with
+  simulated-send notice, reject, return-to-task), Automations (CRUD-lite,
+  enable switch, run now, duplicate, run history), Archive (list, search,
+  restore), Settings (profile, appearance, mailboxes, agent defaults,
+  notification switches, contacts, sessions, export/delete flows).
+- Composer modal handles new/reply/reply-all/forward/draft editing with
+  save-draft and confirmed send; demo sends show the simulated-send notice.
+- CSS tokens replaced with the exact spec Section 1.7 values (single
+  #2563EB accent for fills, hover, focus and accent text; muted status
+  colors; khaki accents). Fonts: Inter + Noto Sans SC. First-paint theme
+  script now falls back to the OS preference per spec 1.8.
+- Removed the V4 local-state modules (src/data.ts, components/icons.tsx);
+  icons now come from lucide-react (added to package.json, installed with
+  pnpm). Verified: tsc --noEmit clean; vite build succeeds (dist JS
+  277 kB / 79 kB gzip, CSS 37 kB).
+
+### Stage 4 deviations / interpretation notes
+- UI copy follows the spec's English strings (V4's Chinese top-bar crumbs
+  are superseded by the spec's English navigation labels); the 意达 brand
+  mark and one bilingual ribbon line remain from V4.
+- Routing is a small built-in history router instead of react-router
+  (keeps the dependency surface unchanged; routes match spec Section 2.1).
+- Two small backend endpoints were added for the top bar: GET
+  /api/v1/notifications and POST /api/v1/notifications/{id}/read.
+- The seeded demo user's "This session" row and session management are
+  fully functional; the demo account shares the same Argon2id + cookie
+  session machinery as registered accounts.

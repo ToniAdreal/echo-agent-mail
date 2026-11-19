@@ -1,233 +1,374 @@
-import { useMemo, useState } from 'react';
-import { Email } from '../data';
-import { IconMail, IconSparkle } from './icons';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  Archive,
+  CornerUpLeft,
+  Forward,
+  Inbox as InboxIcon,
+  MailOpen,
+  Reply,
+  ReplyAll,
+  Send,
+  Sparkles,
+  Star,
+  Trash2,
+} from 'lucide-react';
+import {
+  api,
+  type Draft,
+  type MailMessage,
+  type ThreadItem,
+} from '../lib/api';
+import { useApp } from '../lib/appctx';
+import {
+  EnvLabel,
+  ErrorCard,
+  SkeletonRows,
+  errorText,
+  fmtDateTime,
+  fmtTime,
+  initials,
+  navigate,
+  useToast,
+} from '../lib/ui';
 
-interface Props {
-  emails: Email[];
-  markRead: (id: string) => void;
-  delegateFromEmail: (e: Email) => void;
-  log: (text: string) => void;
-  query: string;
+const FOLDERS = [
+  { id: 'inbox', label: 'Inbox', icon: InboxIcon },
+  { id: 'sent', label: 'Sent', icon: Send },
+  { id: 'starred', label: 'Starred', icon: Star },
+] as const;
+
+type Folder = 'inbox' | 'sent' | 'drafts' | 'starred' | 'archive' | 'trash';
+
+function useQueryParam(name: string): string | null {
+  const [v, setV] = useState(() => new URLSearchParams(window.location.search).get(name));
+  useEffect(() => {
+    const onPop = () => setV(new URLSearchParams(window.location.search).get(name));
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, [name]);
+  return v;
 }
 
-const TAG_LABELS: Record<string, string> = {
-  客户: '客户合作',
-  会议: '会议与日程',
-  财务: '财务账单',
-  招聘: '招聘',
-  纪要: '会议纪要',
-  订阅: '订阅通知',
-};
+export default function Inbox() {
+  const toast = useToast();
+  const { openComposer, refreshBadges } = useApp();
+  const messageParam = useQueryParam('message');
+  const [folder, setFolder] = useState<Folder>('inbox');
+  const [messages, setMessages] = useState<MailMessage[]>([]);
+  const [drafts, setDrafts] = useState<Draft[]>([]);
+  const [threads, setThreads] = useState<ThreadItem[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<MailMessage | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<unknown>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
-function initials(from: string): string {
-  const ascii = from.replace(/[^A-Za-z ]/g, '').trim();
-  if (ascii) {
-    const parts = ascii.split(/\s+/);
-    return (parts[0][0] + (parts[1]?.[0] ?? '')).toUpperCase();
-  }
-  return from.slice(0, 1);
-}
+  const reload = () => setReloadKey((k) => k + 1);
 
-export default function Inbox({ emails, markRead, delegateFromEmail, log, query }: Props) {
-  const [folder, setFolder] = useState<string>('all');
-  const [selectedId, setSelectedId] = useState<string>(emails[0]?.id ?? '');
-  const [composing, setComposing] = useState(false);
-  const [replyText, setReplyText] = useState('');
-  const [sentNote, setSentNote] = useState(false);
-
-  const unread = emails.filter((e) => e.unread).length;
-
-  const tagFolders = useMemo(() => {
-    const seen: { tag: string; count: number }[] = [];
-    for (const e of emails) {
-      const f = seen.find((x) => x.tag === e.tag);
-      if (f) f.count += 1;
-      else seen.push({ tag: e.tag, count: 1 });
-    }
-    return seen;
-  }, [emails]);
-
-  const filtered = useMemo(() => {
-    let list = emails;
-    if (folder === 'unread') list = list.filter((e) => e.unread);
-    else if (folder.startsWith('tag:')) list = list.filter((e) => e.tag === folder.slice(4));
-    const q = query.trim().toLowerCase();
-    if (q) {
-      list = list.filter(
-        (e) =>
-          e.subject.toLowerCase().includes(q) ||
-          e.from.toLowerCase().includes(q) ||
-          e.preview.toLowerCase().includes(q) ||
-          e.body.join(' ').toLowerCase().includes(q),
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    const jobs: Promise<unknown>[] = [
+      api<{ items: ThreadItem[] }>('/api/v1/threads?limit=100').then((d) => alive && setThreads(d.items)),
+      api<{ items: Draft[] }>('/api/v1/drafts').then((d) => alive && setDrafts(d.items)),
+    ];
+    if (folder !== 'drafts') {
+      jobs.push(
+        api<{ items: MailMessage[] }>(`/api/v1/mail/messages?folder=${folder}&limit=100`).then(
+          (d) => alive && setMessages(d.items),
+        ),
       );
     }
-    return list;
-  }, [emails, folder, query]);
+    Promise.all(jobs)
+      .catch((e) => alive && setError(e))
+      .finally(() => alive && setLoading(false));
+    return () => {
+      alive = false;
+    };
+  }, [folder, reloadKey]);
 
-  const selected = emails.find((e) => e.id === selectedId) ?? filtered[0];
+  // Deep link from search / briefing: open a specific message.
+  useEffect(() => {
+    if (messageParam) {
+      setFolder('inbox');
+      setSelectedId(messageParam);
+    }
+  }, [messageParam]);
 
-  const openEmail = (e: Email) => {
-    setSelectedId(e.id);
-    markRead(e.id);
-    setComposing(false);
-    setSentNote(false);
-  };
+  useEffect(() => {
+    if (!selectedId) {
+      setDetail(null);
+      return;
+    }
+    let alive = true;
+    api<{ message: MailMessage }>(`/api/v1/mail/messages/${selectedId}`)
+      .then((d) => {
+        if (!alive) return;
+        setDetail(d.message);
+        if (!d.message.is_read) {
+          api(`/api/v1/mail/messages/${selectedId}/read-state`, {
+            method: 'POST',
+            body: { is_read: true },
+          })
+            .then(() => {
+              refreshBadges();
+              setMessages((prev) => prev.map((m) => (m.id === selectedId ? { ...m, is_read: true } : m)));
+            })
+            .catch(() => {});
+        }
+      })
+      .catch((e) => alive && setError(e));
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, reloadKey]);
 
-  const sendReply = () => {
-    if (!selected || !replyText.trim()) return;
-    log(`你在收件箱手动回复了 ${selected.from} 的邮件「${selected.subject}」`);
-    setReplyText('');
-    setComposing(false);
-    setSentNote(true);
-  };
-
-  const folderLabel =
-    folder === 'all' ? '全部' : folder === 'unread' ? '未读' : TAG_LABELS[folder.slice(4)] ?? folder.slice(4);
-  const now = new Date();
-  const syncTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-
-  const folderBtn = (key: string, label: string, count: number) => (
-    <button key={key} className={`folder-item ${folder === key ? 'active' : ''}`} onClick={() => setFolder(key)}>
-      <IconMail size={16} />
-      <span className="folder-label">{label}</span>
-      <span className="folder-count">{count}</span>
-    </button>
+  const counts = useMemo(
+    () => ({
+      inbox: threads.filter((t) => !t.is_archived).reduce((n, t) => n + t.unread_count, 0),
+      drafts: drafts.length,
+      archive: threads.filter((t) => t.is_archived).length,
+    }),
+    [threads, drafts],
   );
 
+  const act = async (fn: () => Promise<unknown>, okText: string, clearSelection = false) => {
+    try {
+      await fn();
+      toast({ text: okText });
+      refreshBadges();
+      if (clearSelection) {
+        setSelectedId(null);
+        setDetail(null);
+      }
+      reload();
+    } catch (e) {
+      toast({ text: errorText(e), error: true });
+    }
+  };
+
+  const handoff = async () => {
+    if (!detail) return;
+    try {
+      const r = await api<{ conversation: any; preview: any }>(
+        `/api/v1/mail/messages/${detail.id}/hand-off`,
+        { method: 'POST', body: {} },
+      );
+      toast({ text: `Agent conversation started: “${r.preview.title}”. Continue in Delegate Work.` });
+      navigate('/delegate');
+    } catch (e) {
+      toast({ text: errorText(e), error: true });
+    }
+  };
+
+  const threadMessages = useMemo(() => {
+    if (!detail) return [];
+    return messages.filter((m) => m.thread_id === detail.thread_id);
+  }, [detail, messages]);
+
   return (
-    <div className="view">
-      <header className="view-head">
-        <div className="kicker">MAIL / YOUR WORKSPACE</div>
-        <h1>收件箱</h1>
-        <p className="view-sub">
-          共 {emails.length} 封 · 未读 {unread} 封 · 最近同步 {syncTime}
-        </p>
-      </header>
+    <div className="view" style={{ maxWidth: 1380 }}>
+      <div className="view-head with-pill">
+        <div>
+          <span className="kicker">INBOX</span>
+          <h1>Your mailbox</h1>
+          <p className="view-sub">Read, reply, archive — or hand a thread to the Agent with its full context attached.</p>
+        </div>
+        <EnvLabel env={detail?.environment ?? messages[0]?.environment ?? 'demo'} />
+      </div>
+
+      {error != null && <ErrorCard error={error} onRetry={reload} />}
 
       <div className="inbox-layout">
-        <section className="panel folder-pane">
-          <div className="pane-title">邮箱</div>
-          {folderBtn('all', '收件箱', emails.length)}
-          {folderBtn('unread', '未读邮件', unread)}
-          {tagFolders.map((f) => folderBtn(`tag:${f.tag}`, TAG_LABELS[f.tag] ?? f.tag, f.count))}
+        <aside className="panel folder-pane">
+          <div className="pane-title">Folders</div>
+          {FOLDERS.map((f) => (
+            <button key={f.id} className={`folder-item${folder === f.id ? ' active' : ''}`} onClick={() => { setFolder(f.id); setSelectedId(null); }}>
+              <f.icon size={16} />
+              <span className="folder-label">{f.label}</span>
+              {f.id === 'inbox' && counts.inbox > 0 && <span className="folder-count">{counts.inbox}</span>}
+            </button>
+          ))}
+          <button className={`folder-item${folder === 'drafts' ? ' active' : ''}`} onClick={() => { setFolder('drafts'); setSelectedId(null); }}>
+            <MailOpen size={16} />
+            <span className="folder-label">Drafts</span>
+            {counts.drafts > 0 && <span className="folder-count">{counts.drafts}</span>}
+          </button>
+          <button className={`folder-item${folder === 'archive' ? ' active' : ''}`} onClick={() => { setFolder('archive'); setSelectedId(null); }}>
+            <Archive size={16} />
+            <span className="folder-label">Archive</span>
+            {counts.archive > 0 && <span className="folder-count">{counts.archive}</span>}
+          </button>
+          <button className={`folder-item${folder === 'trash' ? ' active' : ''}`} onClick={() => { setFolder('trash'); setSelectedId(null); }}>
+            <Trash2 size={16} />
+            <span className="folder-label">Trash</span>
+          </button>
           <div className="pane-divider" />
-          <div className="pane-title">标签</div>
-          <button className={`tag-row ${folder === 'unread' ? 'active' : ''}`} onClick={() => setFolder('unread')}>
-            <span className="tag-dot dot-warn" />
-            需要答复
-            <span className="folder-count">{unread}</span>
-          </button>
-          <button
-            className={`tag-row ${folder === 'tag:客户' ? 'active' : ''}`}
-            onClick={() => setFolder('tag:客户')}
-          >
-            <span className="tag-dot dot-accent" />
-            客户合作
-            <span className="folder-count">{emails.filter((e) => e.tag === '客户').length}</span>
-          </button>
-          <button
-            className={`tag-row ${folder === 'tag:财务' ? 'active' : ''}`}
-            onClick={() => setFolder('tag:财务')}
-          >
-            <span className="tag-dot dot-info" />
-            财务账单
-            <span className="folder-count">{emails.filter((e) => e.tag === '财务').length}</span>
-          </button>
-        </section>
+          <div className="pane-title">Labels</div>
+          {['needs-reply', 'invoice', 'scheduling', 'partnership', 'security', 'newsletter'].map((l) => (
+            <span key={l} className="tag-row" style={{ cursor: 'default' }}>
+              <span className="tag-dot" style={{ background: 'var(--khaki)' }} />
+              {l}
+            </span>
+          ))}
+        </aside>
 
         <section className="panel list-pane">
-          <div className="section-head">
-            <h2>邮件列表</h2>
-            <span className="pill pill-neutral">
-              {folderLabel} {filtered.length}
-            </span>
+          <div className="pane-title" style={{ padding: '0 0 10px' }}>
+            {folder === 'drafts' ? 'Drafts' : folder[0].toUpperCase() + folder.slice(1)}
           </div>
-          <div className="mail-list">
-            {filtered.length === 0 && <div className="empty-mini">没有匹配的邮件</div>}
-            {filtered.map((e) => (
-              <button
-                key={e.id}
-                className={`mail-row ${selected?.id === e.id ? 'active' : ''}`}
-                onClick={() => openEmail(e)}
-              >
-                <span className={`mail-avatar ${selected?.id === e.id ? 'accent' : ''}`}>{initials(e.from)}</span>
-                <span className="mail-main">
-                  <span className="mail-row-top">
-                    <span className="mail-from">{e.from}</span>
-                    <span className="mail-time">{e.time}</span>
+          {loading && <SkeletonRows rows={5} />}
+          {!loading && folder === 'drafts' && (
+            <div className="mail-list">
+              {drafts.length === 0 && <div className="empty-mini">No drafts. Agent drafts waiting for approval live in the Review Queue.</div>}
+              {drafts.map((d) => (
+                <button
+                  key={d.id}
+                  className="mail-row"
+                  onClick={() => openComposer({ draftId: d.id, mode: 'new', onDone: reload })}
+                >
+                  <span className="mail-avatar">Dr</span>
+                  <span className="mail-main">
+                    <span className="mail-row-top">
+                      <span className="mail-from">{d.to.map((r) => r.name ?? r.email).join(', ') || '(no recipient)'}</span>
+                      <span className="mail-time">{fmtTime(d.updated_at)}</span>
+                    </span>
+                    <span className="mail-subject">{d.subject || '(no subject)'}</span>
+                    <span className="mail-snippet">{d.body_text.slice(0, 90)}</span>
                   </span>
-                  <span className="mail-subject">{e.subject}</span>
-                  <span className="mail-snippet">{e.preview}</span>
-                </span>
-                {e.unread && <span className="unread-dot" />}
-              </button>
-            ))}
-          </div>
+                </button>
+              ))}
+            </div>
+          )}
+          {!loading && folder !== 'drafts' && (
+            <div className="mail-list">
+              {messages.length === 0 && <div className="empty-mini">Nothing in this folder.</div>}
+              {messages.map((m) => (
+                <button key={m.id} className={`mail-row${selectedId === m.id ? ' active' : ''}`} onClick={() => setSelectedId(m.id)}>
+                  <span className="mail-avatar">{initials(m.from.name ?? m.from.email)}</span>
+                  <span className="mail-main">
+                    <span className="mail-row-top">
+                      <span className="mail-from" style={m.is_read ? { fontWeight: 500 } : undefined}>
+                        {m.direction === 'outbound' ? `To: ${m.to.map((r) => r.name ?? r.email).join(', ')}` : (m.from.name ?? m.from.email)}
+                      </span>
+                      <span className="mail-time">{fmtTime(m.created_at)}</span>
+                    </span>
+                    <span className="mail-subject">{m.subject}</span>
+                    <span className="mail-snippet">{m.snippet}</span>
+                  </span>
+                  {!m.is_read && <span className="unread-dot" />}
+                </button>
+              ))}
+            </div>
+          )}
         </section>
 
         <section className="panel read-pane">
-          {selected ? (
+          {!detail && (
+            <div className="empty-card" style={{ border: 'none', background: 'transparent' }}>
+              <img className="empty-motif only-night" src="assets/empty-inbox-dark.png" alt="" />
+              <img className="empty-motif only-day" src="assets/empty-inbox-light.png" alt="" />
+              Select a message to read it here. Replies, forwards, archiving and Agent hand-off all happen in place.
+            </div>
+          )}
+          {detail && (
             <>
-              <h2 className="read-subject">{selected.subject}</h2>
+              <h2 className="read-subject">{detail.subject}</h2>
               <div className="read-pills">
-                <span className="pill pill-accent">{TAG_LABELS[selected.tag] ?? selected.tag}</span>
-                {selected.unread && <span className="pill pill-warn">未读</span>}
+                <EnvLabel env={detail.environment} />
+                {detail.labels.map((l) => (
+                  <span key={l} className="pill pill-khaki">{l}</span>
+                ))}
+                {detail.importance === 'high' && <span className="pill pill-danger">High importance</span>}
+                {detail.has_attachments && <span className="pill pill-neutral">Has attachments</span>}
               </div>
               <div className="read-meta">
-                <span className="mail-avatar accent">{initials(selected.from)}</span>
+                <span className="mail-avatar">{initials(detail.from.name ?? detail.from.email)}</span>
                 <span className="read-meta-main">
-                  <span className="read-from">
-                    {selected.from} · {selected.role}
+                  <span className="read-from">{detail.from.name ?? detail.from.email}</span>
+                  <span className="read-sub">
+                    {detail.from.email} · to {detail.to.map((r) => r.name ?? r.email).join(', ')} · {fmtDateTime(detail.created_at)}
                   </span>
-                  <span className="read-sub">收件人：Toni · {selected.time}</span>
+                </span>
+                <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+                  <button
+                    className="icon-btn"
+                    aria-label={detail.is_starred ? 'Unstar' : 'Star'}
+                    onClick={() =>
+                      act(
+                        () => api(`/api/v1/mail/messages/${detail.id}/star`, { method: 'POST', body: { is_starred: !detail.is_starred } }),
+                        detail.is_starred ? 'Star removed.' : 'Starred.',
+                      )
+                    }
+                  >
+                    <Star size={16} fill={detail.is_starred ? 'currentColor' : 'none'} />
+                  </button>
+                  <button
+                    className="icon-btn"
+                    aria-label="Archive thread"
+                    onClick={() => act(() => api(`/api/v1/mail/threads/${detail.thread_id}/archive`, { method: 'POST', body: {} }), 'Thread archived.', true)}
+                  >
+                    <Archive size={16} />
+                  </button>
+                  <button
+                    className="icon-btn"
+                    aria-label="Move to trash"
+                    onClick={() => act(() => api(`/api/v1/mail/messages/${detail.id}/trash`, { method: 'POST', body: {} }), 'Moved to trash.', true)}
+                  >
+                    <Trash2 size={16} />
+                  </button>
                 </span>
               </div>
               <div className="read-body">
-                {selected.body.map((p, i) => (
+                {detail.body_text.split('\n\n').map((p, i) => (
                   <p key={i}>{p}</p>
                 ))}
               </div>
-              {sentNote && <div className="state-banner done">回复已发送（手动模式）。</div>}
-              {composing ? (
-                <div className="composer">
-                  <div className="composer-head">回复 {selected.from}</div>
-                  <textarea
-                    value={replyText}
-                    onChange={(e) => setReplyText(e.target.value)}
-                    rows={6}
-                    placeholder="写下你的回复…"
-                  />
-                  <div className="btn-row">
-                    <button className="btn btn-primary" onClick={sendReply}>
-                      发送
-                    </button>
-                    <button className="btn btn-ghost" onClick={() => setComposing(false)}>
-                      取消
-                    </button>
+              {detail.attachments && detail.attachments.length > 0 && (
+                <div style={{ marginTop: 14 }}>
+                  <div className="pane-title" style={{ padding: '0 0 8px' }}>Attachments</div>
+                  <div className="chip-row">
+                    {detail.attachments.map((a) => (
+                      <span key={a.id} className="ctx-chip">
+                        {a.filename} · {Math.max(1, Math.round(a.size_bytes / 1024))} KB · {a.scan_status}
+                      </span>
+                    ))}
                   </div>
                 </div>
-              ) : (
-                <div className="btn-row read-actions">
-                  <button className="btn btn-dark" onClick={() => setComposing(true)}>
-                    回复邮件
-                  </button>
-                </div>
               )}
+              {threadMessages.length > 1 && (
+                <p className="panel-foot-note">
+                  This thread has {threadMessages.length} messages in this folder. The Agent hand-off includes the full thread.
+                </p>
+              )}
+              <div className="btn-row read-actions">
+                <button className="btn btn-primary" onClick={() => openComposer({ mode: 'reply', messageId: detail.id, onDone: reload })}>
+                  <Reply size={14} /> Reply
+                </button>
+                <button className="btn btn-dark" onClick={() => openComposer({ mode: 'reply_all', messageId: detail.id, onDone: reload })}>
+                  <ReplyAll size={14} /> Reply all
+                </button>
+                <button className="btn btn-dark" onClick={() => openComposer({ mode: 'forward', messageId: detail.id, onDone: reload })}>
+                  <Forward size={14} /> Forward
+                </button>
+                <button className="btn btn-ghost" onClick={() => act(() => api(`/api/v1/mail/messages/${detail.id}/read-state`, { method: 'POST', body: { is_read: false } }), 'Marked as unread.')}>
+                  <CornerUpLeft size={14} /> Mark unread
+                </button>
+              </div>
               <div className="agent-cta">
                 <span className="agent-cta-icon">
-                  <IconSparkle size={17} />
+                  <Sparkles size={17} />
                 </span>
                 <span className="agent-cta-main">
-                  <span className="agent-cta-title">交给 Agent 处理</span>
-                  <span className="agent-cta-desc">Agent 将起草回复并等待你的批准</span>
+                  <span className="agent-cta-title">Let the Agent handle this thread</span>
+                  <span className="agent-cta-desc">Starts a conversation with this thread attached as context. Nothing is sent without your approval path.</span>
                 </span>
-                <button className="btn btn-primary" onClick={() => delegateFromEmail(selected)}>
-                  开始委托
+                <button className="btn btn-primary" onClick={handoff}>
+                  Hand off to Agent
                 </button>
               </div>
             </>
-          ) : (
-            <div className="empty-mini">选择一封邮件阅读</div>
           )}
         </section>
       </div>

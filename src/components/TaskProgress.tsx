@@ -1,366 +1,474 @@
-import { useState } from 'react';
-import { AUTONOMY_LABELS, Autonomy, TaskPlan } from '../data';
-import { IconCheck, IconClock, IconShieldCheck } from './icons';
+import { useEffect, useState } from 'react';
+import { AlertTriangle, Check, Clock, Hand, Pause, Play, RotateCcw, X } from 'lucide-react';
+import {
+  api,
+  type Decision,
+  type TaskItem,
+  type TaskStep,
+} from '../lib/api';
+import { useApp } from '../lib/appctx';
+import {
+  ErrorCard,
+  Modal,
+  SkeletonRows,
+  errorText,
+  fmtDateTime,
+  navigate,
+  timeAgo,
+  useAsync,
+  useToast,
+} from '../lib/ui';
 
-export type TaskStatus = 'running' | 'waiting' | 'paused' | 'takenover' | 'done' | 'cancelled';
-
-export interface TaskState {
-  id: string;
-  title: string;
-  intent: string;
-  autonomy: Autonomy;
-  plan: TaskPlan;
-  current: number;
-  status: TaskStatus;
-  gate: 'tone' | 'send' | 'step' | null;
-  tone: 'formal' | 'concise' | null;
-  finalAction: 'sent' | 'saved' | null;
-}
-
-interface Props {
-  task: TaskState | null;
-  resolveGate: (payload: { tone?: 'formal' | 'concise'; sendAction?: 'send' | 'save' }) => void;
-  control: (action: 'pause' | 'resume' | 'takeover' | 'cancel') => void;
-  finalAction: (action: 'send' | 'save', editedBody?: string) => void;
-  goDelegate: () => void;
-  goInbox: () => void;
-}
-
-const STATUS_META: Record<TaskStatus, { label: string; cls: string; sentence: string }> = {
-  running: { label: '进行中', cls: 'pill-accent', sentence: 'Agent 正在执行，步骤完成后自动推进' },
-  waiting: { label: '停在决策点', cls: 'pill-warn', sentence: '执行已暂停，等待你的决定' },
-  paused: { label: '已暂停', cls: 'pill-khaki', sentence: '任务已暂停，等待你继续' },
-  takenover: { label: '已转为手动', cls: 'pill-info', sentence: '已转为手动处理，Agent 已停止' },
-  done: { label: '已完成', cls: 'pill-ok', sentence: '全部步骤已完成' },
-  cancelled: { label: '已终止', cls: 'pill-danger', sentence: '任务已终止，未发送任何内容' },
+const STATUS_PILL: Record<string, string> = {
+  running: 'pill-accent',
+  waiting_user: 'pill-warn',
+  paused: 'pill-neutral',
+  manual_control: 'pill-info',
+  needs_attention: 'pill-danger',
+  failed: 'pill-danger',
+  completed: 'pill-ok',
+  cancelled: 'pill-neutral',
+  draft: 'pill-neutral',
+  queued: 'pill-neutral',
 };
 
-export default function TaskProgress({ task, resolveGate, control, finalAction, goDelegate, goInbox }: Props) {
-  const [editingResult, setEditingResult] = useState(false);
-  const [resultText, setResultText] = useState('');
+const MODE_LABEL: Record<string, string> = {
+  confirm_every_step: 'Confirm Every Step',
+  confirm_milestones: 'Confirm at Key Milestones',
+  confirm_before_send: 'Fully Automatic but Confirm Before Sending',
+};
 
-  if (!task) {
-    return (
-      <div className="view">
-        <header className="view-head">
-          <div className="kicker">WORKFLOW / NO ACTIVE TASK</div>
-          <h1>任务进度</h1>
-          <p className="view-sub">还没有正在执行的任务。</p>
-        </header>
+export function StatusPill({ status }: { status: string }) {
+  return <span className={`pill ${STATUS_PILL[status] ?? 'pill-neutral'}`}>{status.replace(/_/g, ' ')}</span>;
+}
+
+export default function TaskProgress({ taskId }: { taskId?: string }) {
+  return taskId ? <TaskDetail taskId={taskId} /> : <TaskList />;
+}
+
+function TaskList() {
+  const [filter, setFilter] = useState('all');
+  const { data, error, loading, reload } = useAsync(
+    () => api<{ items: TaskItem[] }>(`/api/v1/tasks?limit=100${filter !== 'all' ? `&status=${filter}` : ''}`),
+    [filter],
+  );
+  const filters = ['all', 'running', 'waiting_user', 'needs_attention', 'paused', 'completed', 'failed'];
+  return (
+    <div className="view">
+      <div className="view-head with-pill">
+        <div>
+          <span className="kicker">TASK PROGRESS</span>
+          <h1>Delegated work, step by step</h1>
+          <p className="view-sub">Every task shows its plan, its current step, and exactly where it is waiting on you.</p>
+        </div>
+      </div>
+      <div className="panel filter-bar">
+        {filters.map((f) => (
+          <button key={f} className={`filter-pill${filter === f ? ' active' : ''}`} onClick={() => setFilter(f)}>
+            {f === 'all' ? 'All' : f.replace(/_/g, ' ')}
+          </button>
+        ))}
+      </div>
+      {loading && <SkeletonRows />}
+      {error != null && <ErrorCard error={error} onRetry={reload} />}
+      {data && data.items.length === 0 && (
         <div className="empty-card">
-          <img className="empty-motif only-night" src="assets/asset_orbit_motif.png" alt="" aria-hidden="true" />
-          <img className="empty-motif only-day" src="assets/asset_orbit_motif_day.png" alt="" aria-hidden="true" />
-          去「委托」页告诉 Agent 你想达成什么结果，任务会在这里实时推进。
-          <div className="btn-row" style={{ marginTop: 14 }}>
-            <button className="btn btn-primary" onClick={goDelegate}>
-              去委托一件事
+          <img className="empty-motif only-night" src="assets/empty-tasks-dark.png" alt="" />
+          <img className="empty-motif only-day" src="assets/empty-tasks-light.png" alt="" />
+          No tasks in this state. Delegate new work and it will appear here.
+          <div className="btn-row">
+            <button className="btn btn-primary" onClick={() => navigate('/delegate')}>
+              Delegate work
             </button>
           </div>
+        </div>
+      )}
+      {data && data.items.length > 0 && (
+        <section className="panel" style={{ padding: '6px 18px' }}>
+          <div className="list-rows">
+            {data.items.map((t) => (
+              <button key={t.id} className="list-row" onClick={() => navigate(`/tasks/${t.id}`)}>
+                <span className="list-row-main">
+                  <span className="list-row-title">
+                    {t.title} <span className="mono" style={{ fontSize: 12, color: 'var(--t4)' }}>{t.display_id}</span>
+                  </span>
+                  <span className="list-row-meta" style={{ display: 'block' }}>
+                    {MODE_LABEL[t.authorization_mode] ?? t.authorization_mode} · Updated {timeAgo(t.updated_at)}
+                  </span>
+                  <span className="progress" style={{ marginTop: 8, maxWidth: 420 }}>
+                    <span className="progress-bar" style={{ width: `${t.progress_percent}%` }} />
+                  </span>
+                </span>
+                <StatusPill status={t.status} />
+                <span className="agent-pct">{t.progress_percent}%</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
+interface TaskDetailData {
+  task: TaskItem & { plan: any; context_scope: any; result_summary: string | null };
+  steps: TaskStep[];
+  decisions: Decision[];
+  events: { id: string; event_type: string; message: string | null; created_at: string }[];
+  review_items: { id: string; status: string }[];
+}
+
+function TaskDetail({ taskId }: { taskId: string }) {
+  const toast = useToast();
+  const { refreshBadges } = useApp();
+  const { data, error, loading, reload } = useAsync(
+    () => api<TaskDetailData>(`/api/v1/tasks/${taskId}`),
+    [taskId],
+  );
+  const [busy, setBusy] = useState(false);
+  const [confirmEnd, setConfirmEnd] = useState(false);
+  const [freeText, setFreeText] = useState<Record<string, string>>({});
+
+  // Live updates arrive over WebSocket in App; poll as a reliable fallback.
+  useEffect(() => {
+    const t = window.setInterval(() => {
+      if (data && ['running', 'waiting_user'].includes(data.task.status)) reload();
+    }, 4000);
+    return () => window.clearInterval(t);
+  }, [data?.task.status, reload]);
+
+  if (loading) {
+    return (
+      <div className="view">
+        <SkeletonRows rows={5} />
+      </div>
+    );
+  }
+  if (error || !data) {
+    return (
+      <div className="view">
+        <ErrorCard error={error ?? new Error('Task not found.')} onRetry={reload} />
+        <div className="btn-row">
+          <button className="btn btn-dark" onClick={() => navigate('/tasks')}>
+            Back to all tasks
+          </button>
         </div>
       </div>
     );
   }
 
-  const meta = STATUS_META[task.status];
-  const pct = Math.round((task.current / task.plan.steps.length) * 100);
-  const draftBody = task.tone === 'formal' ? task.plan.toneFormal : task.plan.toneConcise;
-  const active = task.status === 'running' || task.status === 'waiting' || task.status === 'paused';
+  const { task, steps, decisions } = data;
+  const pending = decisions.filter((d) => d.status === 'pending');
+
+  const call = async (fn: () => Promise<unknown>, okText?: string) => {
+    setBusy(true);
+    try {
+      await fn();
+      if (okText) toast({ text: okText });
+      refreshBadges();
+      reload();
+    } catch (e) {
+      toast({ text: errorText(e), error: true });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resolve = (d: Decision, body: Record<string, unknown>, okText: string) =>
+    call(() => api(`/api/v1/decisions/${d.id}/resolve`, { method: 'POST', body }), okText);
 
   return (
     <div className="view">
-      <header className="view-head with-pill">
+      <div className="view-head with-pill">
         <div>
-          <div className="kicker">WORKFLOW / TASK-{task.id.toUpperCase()}</div>
-          <h1>任务进度</h1>
-          <p className="view-sub">{task.title}</p>
+          <span className="kicker">
+            TASK <span className="mono">{task.display_id}</span>
+          </span>
+          <h1>{task.title}</h1>
+          <p className="view-sub">{task.goal}</p>
         </div>
-        <span className={`pill pill-lg ${meta.cls}`}>{meta.label}</span>
-      </header>
+        <StatusPill status={task.status} />
+      </div>
 
       <section className="panel progress-panel">
         <div className="progress-top">
           <span className="progress-status">
-            TASK-{task.id.toUpperCase()} · {meta.sentence} · 授权范围：{AUTONOMY_LABELS[task.autonomy]}
+            {task.status === 'completed'
+              ? 'Delivered'
+              : task.status === 'waiting_user'
+                ? 'Waiting for your decision below'
+                : task.status === 'manual_control'
+                  ? 'You have manual control — the Agent is paused'
+                  : task.status.replace(/_/g, ' ')}{' '}
+            · {MODE_LABEL[task.authorization_mode] ?? task.authorization_mode} · Created {fmtDateTime(task.created_at)}
           </span>
-          <span className="progress-pct">{pct}%</span>
+          <span className="progress-pct">{task.progress_percent}%</span>
         </div>
-        <div className="progress progress-lg">
-          <div className="progress-bar" style={{ width: `${pct}%` }} />
-        </div>
+        <span className="progress progress-lg">
+          <span className="progress-bar" style={{ width: `${task.progress_percent}%` }} />
+        </span>
+        {task.result_summary && (
+          <div className="state-banner done">
+            <strong>Result:</strong> {task.result_summary}
+          </div>
+        )}
       </section>
-
-      {task.status === 'takenover' && (
-        <div className="state-banner manual">
-          已转为手动处理。Agent 已停止，不会再发送或修改任何内容。相关邮件在收件箱里，你可以自己回复。
-          <div className="btn-row" style={{ marginTop: 10 }}>
-            <button className="btn btn-dark" onClick={goInbox}>
-              打开收件箱
-            </button>
-            <button className="btn btn-ghost" onClick={goDelegate}>
-              重新委托
-            </button>
-          </div>
-        </div>
-      )}
-      {task.status === 'cancelled' && (
-        <div className="state-banner stopped">
-          任务已终止。已完成的步骤保留在活动日志里，未发送任何内容。
-          <div className="btn-row" style={{ marginTop: 10 }}>
-            <button className="btn btn-ghost" onClick={goDelegate}>
-              重新委托
-            </button>
-          </div>
-        </div>
-      )}
 
       <div className="task-grid">
         <section className="panel timeline-panel">
           <div className="section-head">
-            <h2>执行时间线</h2>
-            <span className="pill pill-neutral">{task.plan.steps.length} 个步骤</span>
+            <h2>Steps</h2>
+            <span className="section-note">
+              {steps.filter((s) => s.status === 'completed').length} of {steps.length} complete
+            </span>
           </div>
-          <ol className="timeline">
-            {task.plan.steps.map((s, i) => {
-              const state = i < task.current ? 'done' : i === task.current ? 'current' : 'todo';
-              return (
-                <li key={i} className={`tl-item ${state}`}>
-                  <span className="tl-dot">
-                    {state === 'done' ? (
-                      <IconCheck size={14} />
-                    ) : state === 'current' && task.status === 'waiting' ? (
-                      <IconShieldCheck size={14} />
-                    ) : state === 'current' ? (
-                      <span className="tl-pulse" />
-                    ) : (
-                      <IconClock size={14} />
+          {steps.map((s) => (
+            <div
+              key={s.id}
+              className={`tl-item${s.status === 'completed' ? ' done' : ''}${s.status === 'running' || s.status === 'waiting_user' ? ' current' : ''}${s.status === 'pending' ? ' todo' : ''}`}
+            >
+              <span className="tl-dot">
+                {s.status === 'completed' ? (
+                  <Check size={14} />
+                ) : s.status === 'running' ? (
+                  <span className="tl-pulse" />
+                ) : s.status === 'failed' ? (
+                  <AlertTriangle size={14} />
+                ) : s.status === 'waiting_user' ? (
+                  <Clock size={14} />
+                ) : (
+                  <span style={{ fontSize: 11, fontWeight: 700 }}>{s.position + 1}</span>
+                )}
+              </span>
+              <span className="tl-body">
+                <span className="tl-label">{s.title}</span>
+                <span className="tl-note" style={{ display: 'block' }}>
+                  {s.step_type.replace(/_/g, ' ')} · {s.status.replace(/_/g, ' ')}
+                  {s.requires_confirmation ? ' · confirmation gate' : ''}
+                </span>
+                {s.result_summary && <span className="tl-note" style={{ display: 'block' }}>{s.result_summary}</span>}
+                {s.error_message && (
+                  <span className="tl-note" style={{ display: 'block', color: 'var(--danger)' }}>
+                    {s.error_message}
+                    {s.status === 'failed' && (
+                      <>
+                        {' '}
+                        <button
+                          className="link-btn"
+                          disabled={busy}
+                          onClick={() => call(() => api(`/api/v1/tasks/${task.id}/steps/${s.id}/retry`, { method: 'POST', body: {} }), 'Step queued for retry.')}
+                        >
+                          Retry step
+                        </button>
+                      </>
                     )}
                   </span>
-                  <div className="tl-body">
-                    <div className="tl-label">{s.label}</div>
-                    {(state === 'done' || state === 'current') && <div className="tl-note">{s.note}</div>}
-                  </div>
-                  {state === 'done' && <span className="pill pill-ok">已完成</span>}
-                  {state === 'current' &&
-                    (task.status === 'waiting' ? (
-                      <span className="pill pill-warn">等待审批</span>
-                    ) : task.status === 'running' ? (
-                      <span className="pill pill-accent">执行中</span>
-                    ) : (
-                      <span className="pill pill-khaki">当前步</span>
-                    ))}
-                  {state === 'todo' && <span className="pill pill-khaki">待执行</span>}
-                </li>
-              );
-            })}
-          </ol>
+                )}
+              </span>
+            </div>
+          ))}
+
+          <div className="section-head" style={{ marginTop: 22 }}>
+            <h2>Activity</h2>
+          </div>
+          {data.events.length === 0 && <div className="empty-mini">No events yet.</div>}
+          {data.events.slice(0, 12).map((e) => (
+            <div key={e.id} className="feed-item">
+              <span className="feed-text">
+                {e.message ?? e.event_type.replace(/[._]/g, ' ')}
+              </span>
+              <span className="feed-time">{timeAgo(e.created_at)}</span>
+            </div>
+          ))}
         </section>
 
         <div className="task-side">
-          {task.status === 'waiting' && task.gate === 'tone' && (
-            <section className="panel gate-panel">
-              <span className="pill pill-warn">需要你选择</span>
-              <h2 className="gate-heading">选择跟进方式</h2>
-              <div className="tone-card selected">
-                <div className="tone-head">
-                  <span>方案 A · 正式版</span>
-                  <span className="tone-rec">推荐</span>
+          {pending.map((d) => (
+            <section key={d.id} className="panel gate-panel">
+              <span className="pill pill-warn">
+                <Clock size={12} /> Decision needed
+              </span>
+              <h3 className="gate-heading">{d.prompt}</h3>
+              {d.context_summary && <p className="gate-desc">{d.context_summary}</p>}
+              {d.decision_type === 'choose_option' && d.options && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12 }}>
+                  {d.options.map((o) => (
+                    <button
+                      key={o.id}
+                      className="tone-card"
+                      style={{ textAlign: 'left', cursor: 'pointer', marginTop: 0 }}
+                      disabled={busy}
+                      onClick={() => resolve(d, { choice: o.id }, `“${o.label}” selected. The task continues.`)}
+                    >
+                      <span className="tone-head">{o.label}</span>
+                      {o.description && <span className="tone-desc" style={{ display: 'block' }}>{o.description}</span>}
+                    </button>
+                  ))}
                 </div>
-                <p className="tone-desc">措辞完整得体，适合正式对外沟通。</p>
-                <pre className="tone-body clamp">{task.plan.toneFormal}</pre>
-                <button className="btn btn-primary btn-block" onClick={() => resolveGate({ tone: 'formal' })}>
-                  用正式版继续
-                </button>
-              </div>
-              <div className="tone-card">
-                <div className="tone-head">
-                  <span>方案 B · 简洁版</span>
-                </div>
-                <p className="tone-desc">更短更直接，适合关系熟悉的对方。</p>
-                <pre className="tone-body clamp">{task.plan.toneConcise}</pre>
-                <button className="btn btn-dark btn-block" onClick={() => resolveGate({ tone: 'concise' })}>
-                  用简洁版继续
-                </button>
-              </div>
-            </section>
-          )}
-
-          {task.status === 'waiting' && task.gate === 'send' && (
-            <section className="panel gate-panel">
-              <span className="pill pill-warn">发送前确认</span>
-              <h2 className="gate-heading">全自动模式 · 发送前确认</h2>
-              <p className="gate-desc">
-                Agent 已自行选定简洁版草稿并完成全部准备。发送对象：{task.plan.draftTo}。
-              </p>
-              <div className="mail-preview">
-                <div className="mail-preview-head">
-                  <span>主题：{task.plan.draftSubject}</span>
-                </div>
-                <pre className="tone-body">{task.plan.toneConcise}</pre>
-              </div>
-              <div className="btn-row">
-                <button className="btn btn-primary" onClick={() => resolveGate({ sendAction: 'send' })}>
-                  确认发送
-                </button>
-                <button className="btn btn-dark" onClick={() => resolveGate({ sendAction: 'save' })}>
-                  先存草稿
-                </button>
-              </div>
-            </section>
-          )}
-
-          {task.status === 'waiting' && task.gate === 'step' && (
-            <section className="panel gate-panel">
-              <span className="pill pill-warn">需要你确认</span>
-              <h2 className="gate-heading">你选择了「每一步问我」</h2>
-              <p className="gate-desc">Agent 准备执行下一步：{task.plan.steps[task.current]?.label}。确认后继续。</p>
-              <div className="btn-row">
-                <button className="btn btn-primary" onClick={() => resolveGate({})}>
-                  继续执行
-                </button>
-              </div>
-            </section>
-          )}
-
-          {task.status === 'done' ? (
-            <section className="panel result-panel">
-              <div className="section-head">
-                <h2>已产出的结果草稿</h2>
-                {task.finalAction === 'sent' ? (
-                  <span className="pill pill-ok">已发送</span>
-                ) : task.finalAction === 'saved' ? (
-                  <span className="pill pill-info">已存入待审阅</span>
-                ) : (
-                  <span className="pill pill-warn">未发送</span>
-                )}
-              </div>
-              <p className="gate-desc">{task.plan.resultSummary}</p>
-              <div className="draft-rows">
-                <div className="draft-row">
-                  <span className="draft-row-label">收件人</span>
-                  <span>{task.plan.draftTo}</span>
-                </div>
-                <div className="draft-row">
-                  <span className="draft-row-label">主题</span>
-                  <span>
-                    {task.plan.draftSubject}
-                    {task.tone && <span className="pill pill-khaki draft-tone-pill">{task.tone === 'formal' ? '正式版' : '简洁版'}</span>}
-                  </span>
-                </div>
-              </div>
-              {editingResult ? (
-                <textarea
-                  className="result-edit"
-                  value={resultText}
-                  onChange={(e) => setResultText(e.target.value)}
-                  rows={9}
-                />
-              ) : (
-                <pre className="tone-body draft-body-box">{draftBody}</pre>
               )}
-              {task.finalAction === 'sent' && (
-                <div className="state-banner done">已发送。你可以在活动日志里看到这次发送的审计记录。</div>
+              {d.decision_type === 'free_text' && (
+                <div style={{ marginTop: 12 }}>
+                  <textarea
+                    className="result-edit"
+                    rows={3}
+                    value={freeText[d.id] ?? ''}
+                    onChange={(e) => setFreeText((p) => ({ ...p, [d.id]: e.target.value }))}
+                    placeholder="Type your instruction…"
+                    aria-label="Your instruction"
+                  />
+                  <div className="btn-row">
+                    <button
+                      className="btn btn-primary"
+                      disabled={busy || !(freeText[d.id] ?? '').trim()}
+                      onClick={() => resolve(d, { response_text: freeText[d.id] }, 'Instruction sent to the Agent.')}
+                    >
+                      Send instruction
+                    </button>
+                    <button className="btn btn-ghost" disabled={busy} onClick={() => resolve(d, { action: 'reject' }, 'Declined. The task is paused.')}>
+                      Decline &amp; pause
+                    </button>
+                  </div>
+                </div>
               )}
-              {task.finalAction === 'saved' && (
-                <div className="state-banner done">已存入「待审阅」，之后随时可以发送。</div>
-              )}
-              {task.finalAction === null && (
+              {(d.decision_type === 'approve_step' || d.decision_type === 'approve_send') && (
                 <div className="btn-row">
-                  {editingResult ? (
-                    <>
-                      <button
-                        className="btn btn-primary"
-                        onClick={() => {
-                          finalAction('send', resultText);
-                          setEditingResult(false);
-                        }}
-                      >
-                        发送修改版
-                      </button>
-                      <button
-                        className="btn btn-dark"
-                        onClick={() => {
-                          finalAction('save', resultText);
-                          setEditingResult(false);
-                        }}
-                      >
-                        存修改版
-                      </button>
-                      <button className="btn btn-ghost" onClick={() => setEditingResult(false)}>
-                        取消编辑
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button className="btn btn-primary" onClick={() => finalAction('send')}>
-                        发送草稿
-                      </button>
-                      <button
-                        className="btn btn-dark"
-                        onClick={() => {
-                          setResultText(draftBody);
-                          setEditingResult(true);
-                        }}
-                      >
-                        查看并修改
-                      </button>
-                      <button className="btn btn-ghost" onClick={() => finalAction('save')}>
-                        存入待审阅
-                      </button>
-                    </>
-                  )}
+                  <button
+                    className="btn btn-primary"
+                    disabled={busy}
+                    onClick={() =>
+                      d.decision_type === 'approve_send'
+                        ? navigate('/review')
+                        : resolve(d, { action: 'approve' }, 'Approved. The task continues.')
+                    }
+                  >
+                    {d.decision_type === 'approve_send' ? 'Review the draft' : 'Approve step'}
+                  </button>
+                  <button className="btn btn-ghost" disabled={busy} onClick={() => resolve(d, { action: 'reject' }, 'Declined. The task is paused.')}>
+                    Decline
+                  </button>
                 </div>
               )}
             </section>
-          ) : (
-            active && (
-              <section className="panel draft-preview-panel">
-                <div className="section-head">
-                  <h2>已产出的结果草稿</h2>
-                  <span className="pill pill-warn">未发送</span>
-                </div>
-                <div className="draft-rows">
-                  <div className="draft-row">
-                    <span className="draft-row-label">收件人</span>
-                    <span>{task.plan.draftTo}</span>
-                  </div>
-                  <div className="draft-row">
-                    <span className="draft-row-label">主题</span>
-                    <span>{task.plan.draftSubject}</span>
-                  </div>
-                </div>
-                <pre className="tone-body clamp draft-body-box">{draftBody}</pre>
-                <p className="draft-note">草稿已生成，任务完成后可发送、修改或存入待审阅。</p>
-              </section>
-            )
-          )}
+          ))}
 
-          {active && (
-            <section className="panel controls-panel">
+          {data.review_items.some((r) => r.status === 'pending') && (
+            <section className="panel draft-preview-panel">
               <div className="section-head">
-                <h2>任务控制</h2>
+                <h2>Draft waiting in Review Queue</h2>
               </div>
+              <p className="gate-desc">This task produced a draft that needs your approval before anything is sent.</p>
               <div className="btn-row">
-                {task.status === 'paused' ? (
-                  <button className="btn btn-primary" onClick={() => control('resume')}>
-                    继续
-                  </button>
-                ) : (
-                  <button className="btn btn-dark" onClick={() => control('pause')} disabled={task.status === 'waiting'}>
-                    暂停
-                  </button>
-                )}
-                <button className="btn btn-dark" onClick={() => control('takeover')}>
-                  接管
-                </button>
-                <button className="btn btn-danger-ghost" onClick={() => control('cancel')}>
-                  终止
+                <button className="btn btn-primary" onClick={() => navigate('/review')}>
+                  Open Review Queue
                 </button>
               </div>
-              <p className="draft-note">运行记录已保存 · 可随时暂停或手动接管</p>
             </section>
           )}
+
+          <section className="panel controls-panel">
+            <div className="section-head">
+              <h2>Controls</h2>
+            </div>
+            <div className="btn-row" style={{ marginTop: 0 }}>
+              {task.status === 'running' && (
+                <button className="btn btn-dark" disabled={busy} onClick={() => call(() => api(`/api/v1/tasks/${task.id}/pause`, { method: 'POST', body: {} }), 'Task paused.')}>
+                  <Pause size={14} /> Pause
+                </button>
+              )}
+              {(task.status === 'paused' || task.status === 'needs_attention') && (
+                <button
+                  className="btn btn-dark"
+                  disabled={busy}
+                  onClick={() => call(() => api(`/api/v1/tasks/${task.id}/resume`, { method: 'POST', body: { acknowledge_summary: true } }), 'Task resumed.')}
+                >
+                  <Play size={14} /> Resume
+                </button>
+              )}
+              {!['completed', 'cancelled', 'manual_control'].includes(task.status) && (
+                <button
+                  className="btn btn-dark"
+                  disabled={busy}
+                  onClick={() => call(() => api(`/api/v1/tasks/${task.id}/takeover`, { method: 'POST', body: {} }), 'You have manual control. The Agent will not act.')}
+                >
+                  <Hand size={14} /> Take over
+                </button>
+              )}
+              {task.status === 'manual_control' && (
+                <button
+                  className="btn btn-dark"
+                  disabled={busy}
+                  onClick={() => call(() => api(`/api/v1/tasks/${task.id}/return-control`, { method: 'POST', body: {} }), 'Control returned to the Agent.')}
+                >
+                  <RotateCcw size={14} /> Return control
+                </button>
+              )}
+              {!['completed', 'cancelled'].includes(task.status) && (
+                <button className="btn btn-danger-ghost" disabled={busy} onClick={() => setConfirmEnd(true)}>
+                  <X size={14} /> End task
+                </button>
+              )}
+            </div>
+            <p className="panel-foot-note">
+              Ending a task preserves completed steps, drafts and the audit record. Nothing already approved is undone.
+            </p>
+          </section>
+
+          <section className="panel result-panel">
+            <div className="section-head">
+              <h2>Plan &amp; authorization</h2>
+            </div>
+            <dl className="kv-grid">
+              <dt>Authorization</dt>
+              <dd>{MODE_LABEL[task.authorization_mode] ?? task.authorization_mode}</dd>
+              <dt>Environment</dt>
+              <dd>{task.environment === 'demo' ? 'Demo mailbox (simulated sends)' : 'Live mailbox'}</dd>
+              <dt>Created</dt>
+              <dd>{fmtDateTime(task.created_at)}</dd>
+              <dt>Updated</dt>
+              <dd>{fmtDateTime(task.updated_at)}</dd>
+            </dl>
+            {task.plan?.steps && (
+              <div style={{ marginTop: 12 }}>
+                {task.plan.steps.map((s: any, i: number) => (
+                  <div key={i} className="plan-step">
+                    <span className="plan-num">{i + 1}</span>
+                    <span className="plan-step-main">
+                      <span className="plan-step-label" style={{ fontSize: 13.5 }}>{s.title}</span>
+                      <span className="plan-step-note" style={{ display: 'block' }}>{s.step_type.replace(/_/g, ' ')}</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
         </div>
       </div>
+
+      {confirmEnd && (
+        <Modal
+          title="End this task?"
+          sub="Completed work, drafts and records are preserved. The Agent stops acting on this task immediately."
+          onClose={() => setConfirmEnd(false)}
+        >
+          <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
+            <button className="btn btn-ghost" onClick={() => setConfirmEnd(false)}>
+              Keep task
+            </button>
+            <button
+              className="btn btn-primary"
+              disabled={busy}
+              onClick={() =>
+                call(
+                  () => api(`/api/v1/tasks/${task.id}/terminate`, { method: 'POST', body: { confirmation: true } }),
+                  'Task ended.',
+                ).then(() => setConfirmEnd(false))
+              }
+            >
+              End task
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

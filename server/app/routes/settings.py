@@ -221,6 +221,39 @@ def delete_account(body: DeleteAccountBody, request: Request, db: DbSession = De
     return clear_session_cookies(resp)
 
 
+# --------------------------------------------------------- notifications
+
+@router.get("/notifications")
+def list_notifications(request: Request, unread_only: bool = False, db: DbSession = Depends(get_db), user: m.User = Depends(get_current_user)):
+    q = db.query(m.Notification).filter(m.Notification.user_id == user.id)
+    if unread_only:
+        q = q.filter(m.Notification.read_at.is_(None))
+    items = q.order_by(m.Notification.created_at.desc()).limit(50).all()
+    unread = db.query(m.Notification).filter(
+        m.Notification.user_id == user.id, m.Notification.read_at.is_(None)
+    ).count()
+    return ok(request, {
+        "items": [
+            {"id": n.id, "type": n.type, "title": n.title, "body": n.body,
+             "resource_type": n.resource_type, "resource_id": n.resource_id,
+             "read_at": ser.utc_iso(n.read_at), "created_at": ser.utc_iso(n.created_at)}
+            for n in items
+        ],
+        "unread_count": unread,
+    })
+
+
+@router.post("/notifications/{notification_id}/read")
+def mark_notification_read(notification_id: str, request: Request, db: DbSession = Depends(get_db), user: m.User = Depends(get_current_user)):
+    n = db.get(m.Notification, notification_id)
+    if n is None or n.user_id != user.id:
+        raise ApiError(404, "NOT_FOUND", "Notification not found.")
+    if n.read_at is None:
+        n.read_at = m.now()
+        db.commit()
+    return ok(request, {"read": True})
+
+
 # ------------------------------------------------------------- contacts
 
 @router.get("/contacts")

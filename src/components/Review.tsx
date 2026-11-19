@@ -1,219 +1,294 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Draft } from '../data';
-import { IconMail, IconSparkle } from './icons';
+import { useEffect, useState } from 'react';
+import { Mail, RotateCcw, ShieldAlert, Sparkles } from 'lucide-react';
+import { api, type ReviewItem } from '../lib/api';
+import { useApp } from '../lib/appctx';
+import {
+  EnvLabel,
+  ErrorCard,
+  SkeletonRows,
+  errorText,
+  navigate,
+  timeAgo,
+  useAsync,
+  useToast,
+} from '../lib/ui';
+import { StatusPill } from './TaskProgress';
 
-interface Props {
-  drafts: Draft[];
-  draftAction: (id: string, action: 'send' | 'discard' | 'edit', body?: string) => void;
-}
+const FILTERS = [
+  { id: 'pending', label: 'Pending' },
+  { id: 'modified', label: 'Edited by you' },
+  { id: 'approved', label: 'Approved' },
+  { id: 'sent', label: 'Sent (simulated)' },
+  { id: 'rejected', label: 'Rejected' },
+  { id: 'all', label: 'All' },
+] as const;
 
-type Filter = 'all' | 'pending' | 'changes' | 'rejected';
-type QueueItem = { draft: Draft; kind: 'live' | 'rejected' };
-
-export default function Review({ drafts, draftAction }: Props) {
-  const [filter, setFilter] = useState<Filter>('all');
+export default function Review() {
+  const toast = useToast();
+  const { refreshBadges } = useApp();
+  const [filter, setFilter] = useState<string>('pending');
+  const { data, error, loading, reload } = useAsync(
+    () =>
+      api<{ items: ReviewItem[] }>(
+        filter === 'all' ? '/api/v1/review?limit=100' : `/api/v1/review?status=${filter}&limit=100`,
+      ),
+    [filter],
+  );
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [editing, setEditing] = useState(false);
-  const [editText, setEditText] = useState('');
-  const [editedIds, setEditedIds] = useState<string[]>([]);
-  const [rejected, setRejected] = useState<Draft[]>([]);
+  const [detail, setDetail] = useState<ReviewItem | null>(null);
+  const [body, setBody] = useState('');
+  const [subject, setSubject] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
 
-  const pending = useMemo(() => drafts.filter((d) => d.status === 'pending'), [drafts]);
-  const sent = useMemo(() => drafts.filter((d) => d.status === 'sent'), [drafts]);
-  const pendingFresh = useMemo(() => pending.filter((d) => !editedIds.includes(d.id)), [pending, editedIds]);
-  const pendingEdited = useMemo(() => pending.filter((d) => editedIds.includes(d.id)), [pending, editedIds]);
-
-  const counts = {
-    all: pending.length + sent.length,
-    pending: pendingFresh.length,
-    changes: pendingEdited.length,
-    rejected: rejected.length,
-  };
-
-  const list: QueueItem[] = useMemo(() => {
-    if (filter === 'pending') return pendingFresh.map((draft) => ({ draft, kind: 'live' as const }));
-    if (filter === 'changes') return pendingEdited.map((draft) => ({ draft, kind: 'live' as const }));
-    if (filter === 'rejected') return rejected.map((draft) => ({ draft, kind: 'rejected' as const }));
-    return [...pending, ...sent].map((draft) => ({ draft, kind: 'live' as const }));
-  }, [filter, pending, sent, pendingFresh, pendingEdited, rejected]);
+  const items = data?.items ?? [];
+  const selected = items.find((i) => i.id === selectedId) ?? items[0] ?? null;
 
   useEffect(() => {
-    if (list.length === 0) {
-      if (selectedId !== null) setSelectedId(null);
+    if (!selected) {
+      setDetail(null);
       return;
     }
-    if (!selectedId || !list.some((x) => x.draft.id === selectedId)) {
-      setSelectedId(list[0].draft.id);
+    let alive = true;
+    api<{ item: ReviewItem }>(`/api/v1/review/${selected.id}`)
+      .then((d) => {
+        if (!alive) return;
+        setDetail(d.item);
+        setBody(d.item.draft.body_text);
+        setSubject(d.item.draft.subject);
+        setNotice(null);
+      })
+      .catch((e) => toast({ text: errorText(e), error: true }));
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id]);
+
+  const run = async (fn: () => Promise<unknown>, okText?: string) => {
+    setBusy(true);
+    try {
+      const r: any = await fn();
+      if (r?.send_result?.notice) setNotice(r.send_result.notice);
+      if (okText) toast({ text: okText });
+      refreshBadges();
+      reload();
+    } catch (e) {
+      toast({ text: errorText(e), error: true });
+      reload();
+    } finally {
+      setBusy(false);
     }
-  }, [list, selectedId]);
-
-  useEffect(() => {
-    setEditing(false);
-  }, [selectedId, filter]);
-
-  const selected = list.find((x) => x.draft.id === selectedId) ?? null;
-  const sel = selected?.draft ?? null;
-  const selEdited = sel ? editedIds.includes(sel.id) : false;
-
-  const statusPill = (item: QueueItem) => {
-    if (item.kind === 'rejected') return <span className="pill pill-danger">已拒绝</span>;
-    if (item.draft.status === 'sent') return <span className="pill pill-ok">已发送</span>;
-    if (editedIds.includes(item.draft.id)) return <span className="pill pill-danger">需修改</span>;
-    return <span className="pill pill-khaki">待批准</span>;
   };
 
-  const doReject = () => {
-    if (!sel || selected?.kind !== 'live') return;
-    setRejected((prev) => [sel, ...prev]);
-    draftAction(sel.id, 'discard');
-  };
+  const edited = detail && (body !== detail.draft.body_text || subject !== detail.draft.subject);
 
-  const doSaveEdit = () => {
-    if (!sel) return;
-    draftAction(sel.id, 'edit', editText);
-    setEditedIds((prev) => (prev.includes(sel.id) ? prev : [...prev, sel.id]));
-    setEditing(false);
-  };
+  const saveEdits = () =>
+    run(async () => {
+      if (!detail) return;
+      const r = await api<{ item: ReviewItem }>(`/api/v1/review/${detail.id}`, {
+        method: 'PATCH',
+        body: { revision: detail.revision, subject, body_text: body },
+      });
+      setDetail(r.item);
+    }, 'Your edits were saved. The item is now marked as edited by you.');
 
-  const doSend = () => {
-    if (!sel) return;
-    draftAction(sel.id, 'send');
-    setEditedIds((prev) => prev.filter((x) => x !== sel.id));
-  };
-
-  const FILTERS: { key: Filter; label: string; count: number }[] = [
-    { key: 'all', label: '全部', count: counts.all },
-    { key: 'pending', label: '待批准', count: counts.pending },
-    { key: 'changes', label: '需修改', count: counts.changes },
-    { key: 'rejected', label: '已拒绝', count: counts.rejected },
-  ];
+  const approve = () =>
+    run(async () => {
+      if (!detail) return;
+      if (edited) {
+        const r = await api<{ item: ReviewItem }>(`/api/v1/review/${detail.id}`, {
+          method: 'PATCH',
+          body: { revision: detail.revision, subject, body_text: body },
+        });
+        return api(`/api/v1/review/${detail.id}/approve`, {
+          method: 'POST',
+          body: { revision: r.item.revision, confirm_send: true },
+        });
+      }
+      return api(`/api/v1/review/${detail.id}/approve`, {
+        method: 'POST',
+        body: { revision: detail.revision, confirm_send: true },
+      });
+    });
 
   return (
     <div className="view">
-      <header className="view-head">
-        <div className="kicker">REVIEW QUEUE / {pending.length} ITEMS</div>
-        <h1>待审阅</h1>
-        <p className="view-sub">Agent 为你准备的外发邮件与关键决策，都需要最后确认。</p>
-      </header>
+      <div className="view-head with-pill">
+        <div>
+          <span className="kicker">REVIEW QUEUE</span>
+          <h1>Nothing sends without you</h1>
+          <p className="view-sub">
+            Every Agent draft lands here first. Edit it, approve it, reject it, or hand it back to the task. Demo sends are simulated and stored in Sent.
+          </p>
+        </div>
+        <span className="pill pill-warn pill-lg">{items.filter((i) => i.status === 'pending' || i.status === 'modified').length} waiting</span>
+      </div>
 
       <div className="panel filter-bar">
         {FILTERS.map((f) => (
-          <button
-            key={f.key}
-            className={`filter-pill ${filter === f.key ? 'active' : ''}`}
-            onClick={() => setFilter(f.key)}
-          >
-            {f.label} {f.count}
+          <button key={f.id} className={`filter-pill${filter === f.id ? ' active' : ''}`} onClick={() => setFilter(f.id)}>
+            {f.label}
           </button>
         ))}
       </div>
 
-      <div className="review-grid">
-        <section className="panel queue-panel">
-          <div className="section-head">
-            <h2>待处理事项</h2>
-            <span className="pill pill-khaki">{list.length} 项</span>
-          </div>
-          <div className="queue-list">
-            {list.length === 0 && <div className="empty-mini">这个分类下暂时没有草稿。</div>}
-            {list.map((item) => (
-              <button
-                key={item.draft.id}
-                className={`queue-item ${sel?.id === item.draft.id && selected?.kind === item.kind ? 'active' : ''}`}
-                onClick={() => setSelectedId(item.draft.id)}
-              >
-                <span className="queue-icon">
-                  <IconMail size={17} />
-                </span>
-                <span className="queue-main">
-                  <span className="queue-title">{item.draft.subject}</span>
-                  <span className="queue-meta">{item.draft.to}</span>
-                  <span className="queue-foot">
-                    {statusPill(item)}
-                    <span className="queue-id">{item.draft.id.toUpperCase()}</span>
-                  </span>
-                </span>
-              </button>
-            ))}
-          </div>
-          <div className="panel-foot-note">所有操作会保留来源与审批记录</div>
-        </section>
+      {error != null && <ErrorCard error={error} onRetry={reload} />}
+      {loading && <SkeletonRows />}
 
-        <section className="panel detail-panel">
-          {sel ? (
-            <>
-              <div className="detail-head">
-                <h2 className="detail-subject">{sel.subject}</h2>
-                {selected?.kind === 'rejected' ? (
-                  <span className="pill pill-danger">已拒绝</span>
-                ) : sel.status === 'sent' ? (
-                  <span className="pill pill-ok">已发送</span>
-                ) : selEdited ? (
-                  <span className="pill pill-danger">需修改</span>
+      {!loading && items.length === 0 && (
+        <div className="empty-card">
+          <img className="empty-motif only-night" src="assets/empty-review-dark.png" alt="" />
+          <img className="empty-motif only-day" src="assets/empty-review-light.png" alt="" />
+          No items in this view. When the Agent prepares a draft for a delegated task or an automation, it waits for you here.
+        </div>
+      )}
+
+      {!loading && items.length > 0 && (
+        <div className="review-grid">
+          <section className="panel queue-panel">
+            <div className="section-head">
+              <h2>Queue</h2>
+              <span className="section-note">{items.length} item(s)</span>
+            </div>
+            <div className="queue-list">
+              {items.map((item) => (
+                <button
+                  key={item.id}
+                  className={`queue-item${selected?.id === item.id ? ' active' : ''}`}
+                  onClick={() => setSelectedId(item.id)}
+                >
+                  <span className="queue-icon">
+                    <Mail size={17} />
+                  </span>
+                  <span className="queue-main">
+                    <span className="queue-title">{item.draft.subject}</span>
+                    <span className="queue-meta">
+                      To {item.draft.to.map((r) => r.name ?? r.email).join(', ')} · {timeAgo(item.created_at)}
+                    </span>
+                    <span className="queue-foot">
+                      <span className="queue-id">{item.task_display_id ?? 'Manual'}</span>
+                      <StatusPill status={item.status} />
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section className="panel detail-panel">
+            {!detail && <div className="empty-mini">Select an item to inspect it.</div>}
+            {detail && (
+              <>
+                <div className="detail-head">
+                  <div>
+                    <h2 className="detail-subject">{detail.draft.subject}</h2>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                      <StatusPill status={detail.status} />
+                      <span className="pill pill-neutral">Risk: {detail.risk_level}</span>
+                      <EnvLabel env={detail.draft.environment} />
+                      {detail.task_display_id && (
+                        <button className="pill pill-accent" style={{ border: 'none', cursor: 'pointer' }} onClick={() => navigate(`/tasks/${detail.task_id}`)}>
+                          Task {detail.task_display_id}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="detail-meta">
+                  <div className="draft-rows">
+                    <div className="draft-row">
+                      <span className="draft-row-label">To</span>
+                      <span>{detail.draft.to.map((r) => (r.name ? `${r.name} <${r.email}>` : r.email)).join(', ')}</span>
+                    </div>
+                    <div className="draft-row">
+                      <span className="draft-row-label">Subject</span>
+                      <span>{detail.draft.subject}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {(detail.status === 'pending' || detail.status === 'modified') ? (
+                  <>
+                    <div className="field">
+                      <label htmlFor="rv-subject">Subject</label>
+                      <input id="rv-subject" value={subject} onChange={(e) => setSubject(e.target.value)} />
+                    </div>
+                    <div className="field">
+                      <label htmlFor="rv-body">Draft body — yours to edit</label>
+                      <textarea id="rv-body" className="result-edit" rows={10} value={body} onChange={(e) => setBody(e.target.value)} />
+                    </div>
+                  </>
                 ) : (
-                  <span className="pill pill-khaki">发送前审批</span>
+                  <div className="detail-body">
+                    <pre className="tone-body">{detail.draft.body_text}</pre>
+                  </div>
                 )}
-              </div>
-              <div className="detail-meta">
-                <div className="draft-row">
-                  <span className="draft-row-label">收件人</span>
-                  <span>{sel.to}</span>
-                </div>
-                <div className="draft-row">
-                  <span className="draft-row-label">来源</span>
-                  <span>{sel.source}</span>
-                </div>
-              </div>
-              {editing ? (
-                <div className="edit-box">
-                  <textarea value={editText} onChange={(e) => setEditText(e.target.value)} rows={12} />
-                  <div className="btn-row">
-                    <button className="btn btn-primary" onClick={doSaveEdit}>
-                      保存修改
-                    </button>
-                    <button className="btn btn-ghost" onClick={() => setEditing(false)}>
-                      取消
-                    </button>
+
+                {detail.agent_note && (
+                  <div className="agent-hint">
+                    <Sparkles size={15} />
+                    <span>
+                      <strong>Why the Agent prepared this:</strong> {detail.agent_note}
+                    </span>
                   </div>
-                </div>
-              ) : (
-                <pre className="tone-body detail-body">{sel.body}</pre>
-              )}
-              <div className="agent-hint">
-                <IconSparkle size={15} />
-                <span>Agent 提示：这封草稿{sel.source}，发送前请再确认收件人与正文内容。</span>
-              </div>
-              {selected?.kind === 'rejected' ? (
-                <div className="state-banner stopped">这封草稿已被你拒绝，不会发送。记录保留在「已拒绝」分类中。</div>
-              ) : sel.status === 'sent' ? (
-                <div className="state-banner done">已批准发送，审计记录已写入活动日志。</div>
-              ) : (
-                !editing && (
+                )}
+                {detail.risk_level !== 'low' && (
+                  <div className="agent-hint" style={{ background: 'var(--warn-bg)', color: 'var(--warn)' }}>
+                    <ShieldAlert size={15} />
+                    <span>This draft is marked {detail.risk_level} risk. Read it fully before approving.</span>
+                  </div>
+                )}
+                {notice && <div className="state-banner done">{notice}</div>}
+
+                {(detail.status === 'pending' || detail.status === 'modified') && (
                   <div className="btn-row detail-actions">
-                    <button className="btn btn-primary btn-lg" onClick={doSend}>
-                      批准并发送
+                    <button className="btn btn-primary" disabled={busy} onClick={approve}>
+                      Approve &amp; send
                     </button>
+                    {edited ? (
+                      <button className="btn btn-dark" disabled={busy} onClick={saveEdits}>
+                        Save edits
+                      </button>
+                    ) : null}
                     <button
-                      className="btn btn-dark btn-lg"
-                      onClick={() => {
-                        setEditText(sel.body);
-                        setEditing(true);
-                      }}
+                      className="btn btn-ghost"
+                      disabled={busy}
+                      onClick={() => run(() => api(`/api/v1/review/${detail.id}/reject`, { method: 'POST', body: {} }), 'Draft rejected.')}
                     >
-                      修改内容
+                      Reject
                     </button>
-                    <button className="btn btn-dark btn-lg" onClick={doReject}>
-                      拒绝
-                    </button>
+                    {detail.task_id && (
+                      <button
+                        className="btn btn-ghost"
+                        disabled={busy}
+                        onClick={() => run(() => api(`/api/v1/review/${detail.id}/return-to-task`, { method: 'POST', body: {} }), 'Returned to the task for revision.')}
+                      >
+                        <RotateCcw size={14} /> Return to task
+                      </button>
+                    )}
                   </div>
-                )
-              )}
-            </>
-          ) : (
-            <div className="empty-mini">从左侧队列选择一封草稿查看详情。</div>
-          )}
-        </section>
-      </div>
+                )}
+                {(detail.status === 'sent' || detail.status === 'approved') && (
+                  <div className="state-banner done" style={{ marginTop: 16 }}>
+                    {detail.draft.environment === 'demo'
+                      ? 'Simulated send — no external email was delivered. The message is stored in Sent.'
+                      : 'Sent.'}
+                  </div>
+                )}
+                {detail.status === 'rejected' && (
+                  <div className="state-banner stopped" style={{ marginTop: 16 }}>
+                    You rejected this draft. Nothing was sent.
+                  </div>
+                )}
+                <p className="draft-note">
+                  Approving performs the send for this draft only. The Agent cannot reuse this approval for other messages.
+                </p>
+              </>
+            )}
+          </section>
+        </div>
+      )}
     </div>
   );
 }

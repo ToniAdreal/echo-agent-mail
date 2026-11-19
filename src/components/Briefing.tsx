@@ -1,288 +1,359 @@
 import { useState } from 'react';
-import { ActivityEntry, Decision, DoneItem } from '../data';
-import { SeededTask } from '../App';
-import { TaskState } from './TaskProgress';
-import { IconArrowRight, IconCheck } from './icons';
+import { ArrowRight, Check, ChevronDown, Plus } from 'lucide-react';
+import { api, type Briefing as BriefingData } from '../lib/api';
+import { useApp } from '../lib/appctx';
+import {
+  EnvLabel,
+  ErrorCard,
+  SkeletonRows,
+  errorText,
+  fmtTime,
+  navigate,
+  timeAgo,
+  useAsync,
+  useToast,
+} from '../lib/ui';
 
-interface Props {
-  decisions: Decision[];
-  resolveDecision: (id: string, action: 'approve' | 'self' | 'ignore', editedDraft?: string) => void;
-  seeded: SeededTask[];
-  activeTask: TaskState | null;
-  doneFeed: DoneItem[];
-  activity: ActivityEntry[];
-  goTask: () => void;
-  goReview: () => void;
-  reviewCount: number;
-  mailTotal: number;
-  unreadCount: number;
-}
+const DOT: Record<string, string> = {
+  running: 'dot-accent',
+  waiting_user: 'dot-khaki',
+  completed: 'dot-ok',
+  failed: 'dot-gray',
+};
 
-const DAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
-const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-const DECISION_TAGS = [
-  { label: '待批准', cls: 'pill-warn' },
-  { label: '待选时间', cls: 'pill-info' },
-  { label: '需修改', cls: 'pill-danger' },
-];
-const DOT_CLASSES = ['dot-gray', 'dot-accent', 'dot-ok'];
-
-export default function Briefing({
-  decisions,
-  resolveDecision,
-  seeded,
-  activeTask,
-  doneFeed,
-  activity,
-  goTask,
-  goReview,
-  reviewCount,
-  mailTotal,
-  unreadCount,
-}: Props) {
-  const [leaving, setLeaving] = useState<string | null>(null);
-  const [editing, setEditing] = useState<string | null>(null);
-  const [editText, setEditText] = useState('');
+export default function Briefing() {
+  const { me, refreshBadges } = useApp();
+  const toast = useToast();
+  const { data, error, loading, reload } = useAsync(() => api<BriefingData>('/api/v1/briefing/today'), []);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [acting, setActing] = useState<string | null>(null);
+  const [newTodo, setNewTodo] = useState('');
 
-  const act = (id: string, action: 'approve' | 'self' | 'ignore', editedDraft?: string) => {
-    setLeaving(id);
-    window.setTimeout(() => {
-      resolveDecision(id, action, editedDraft);
-      setLeaving(null);
-      setEditing(null);
-    }, 320);
+  if (loading) {
+    return (
+      <div className="view">
+        <SkeletonRows rows={5} />
+      </div>
+    );
+  }
+  if (error || !data) {
+    return (
+      <div className="view">
+        <ErrorCard error={error ?? new Error('Briefing unavailable.')} onRetry={reload} />
+      </div>
+    );
+  }
+
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+  const firstName = me.name.split(' ')[0];
+
+  const actOnDecision = async (d: BriefingData['decisions'][number], action: 'approve' | 'reject' | 'choose', choice?: string) => {
+    setActing(d.id);
+    try {
+      if (d.kind === 'review_item') {
+        if (action === 'approve') {
+          const detail = await api<any>(`/api/v1/review/${d.id}`);
+          await api(`/api/v1/review/${d.id}/approve`, {
+            method: 'POST',
+            body: { revision: detail.item.revision, confirm_send: true },
+          });
+          toast({ text: 'Approved. Simulated send completed — the message is in Sent.' });
+        } else {
+          await api(`/api/v1/review/${d.id}/reject`, { method: 'POST', body: {} });
+          toast({ text: 'Draft rejected. The task was flagged for your attention.' });
+        }
+      } else {
+        await api(`/api/v1/decisions/${d.id}/resolve`, {
+          method: 'POST',
+          body: action === 'choose' ? { choice } : { action },
+        });
+        toast({ text: action === 'reject' ? 'Declined. The task is paused.' : 'Decision recorded. The task continues.' });
+      }
+      refreshBadges();
+      reload();
+    } catch (e) {
+      toast({ text: errorText(e), error: true });
+    } finally {
+      setActing(null);
+    }
   };
 
-  const taskRunning =
-    activeTask && (activeTask.status === 'running' || activeTask.status === 'waiting' || activeTask.status === 'paused');
-  const runningCount = seeded.length + (taskRunning ? 1 : 0);
-  const now = new Date();
+  const addTodo = async () => {
+    if (!newTodo.trim()) return;
+    try {
+      await api('/api/v1/todos', { method: 'POST', body: { title: newTodo.trim() } });
+      setNewTodo('');
+      reload();
+    } catch (e) {
+      toast({ text: errorText(e), error: true });
+    }
+  };
 
-  const stats = [
-    { num: mailTotal, label: '新邮件', sub: `其中 ${unreadCount} 封未读` },
-    { num: decisions.length, label: '待决策', sub: '待用户处理' },
-    { num: runningCount, label: '进行中', sub: 'Agent 执行中' },
-    { num: doneFeed.length, label: '已交付', sub: '今日成果' },
-  ];
+  const toggleTodo = async (t: BriefingData['todos'][number]) => {
+    try {
+      await api(`/api/v1/todos/${t.id}`, {
+        method: 'PATCH',
+        body: { status: t.status === 'completed' ? 'open' : 'completed' },
+      });
+      reload();
+    } catch (e) {
+      toast({ text: errorText(e), error: true });
+    }
+  };
 
   return (
     <div className="view">
-      <header className="view-head">
-        <div className="kicker">TODAY / {DAYS[now.getDay()]} {now.getDate()} {MONTHS[now.getMonth()]}</div>
-        <h1>今日简报</h1>
-        <p className="view-sub">Agent 已筛选今日来信与待办，优先呈现需要你决策的事项。</p>
-      </header>
-
       <section className="hero">
-        <img className="hero-nebula" src="assets/asset_nebula_glow.png" alt="" aria-hidden="true" />
-        <img className="hero-art only-night" src="assets/asset_hero_orbit.png" alt="" aria-hidden="true" />
-        <img className="hero-art only-day" src="assets/asset_hero_orbit_day.png" alt="" aria-hidden="true" />
+        <img className="hero-nebula only-night" src="assets/nebula-dark.png" alt="" />
+        <img className="hero-nebula only-day" src="assets/nebula-light.png" alt="" />
+        <img className="hero-art only-night" src="assets/galaxy-dark.png" alt="" />
+        <img className="hero-art only-day" src="assets/galaxy-light.png" alt="" />
         <div className="hero-content">
-          <div className="hero-kicker">WORK BRIEF · {MONTHS[now.getMonth()]} {now.getDate()}</div>
-          <h2 className="hero-title">
-            {decisions.length > 0 ? `今天只有 ${decisions.length} 项需要你做决定` : '今天没有待决定的事项'}
-          </h2>
+          <div className="hero-kicker">TODAY BRIEFING · {new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase()}</div>
+          <h1 className="hero-title">
+            {greeting}, {firstName}
+          </h1>
           <p className="hero-sub">
-            其余工作由 Agent 持续推进。{reviewCount} 封邮件待审核，{runningCount} 项任务运行中。
+            {data.metrics.pending_decisions > 0
+              ? `${data.metrics.pending_decisions} item(s) need your decision, ${data.metrics.active_tasks} delegated task(s) are in motion, and ${data.metrics.unread_count} messages are unread.`
+              : 'Nothing is waiting on you. Your delegated work is in motion.'}
           </p>
           <div className="hero-actions">
-            <button className="btn btn-primary btn-lg" onClick={goReview}>
-              处理待审阅
+            <button className="btn btn-primary btn-lg" onClick={() => navigate('/delegate')}>
+              Delegate new work
             </button>
-            <button className="btn btn-dark btn-lg" onClick={goTask}>
-              查看任务进度
+            <button className="btn btn-dark btn-lg" onClick={() => navigate('/review')}>
+              Review pending items
             </button>
           </div>
         </div>
       </section>
 
       <section className="stats-strip panel">
-        {stats.map((s) => (
-          <div key={s.label} className="stat-cell">
-            <div className="stat-num">{String(s.num).padStart(2, '0')}</div>
-            <div className="stat-meta">
-              <div className="stat-label">{s.label}</div>
-              <div className="stat-sub">{s.sub}</div>
-            </div>
+        <div className="stat-cell">
+          <div>
+            <div className="stat-num">{data.metrics.unread_count}</div>
           </div>
-        ))}
+          <div>
+            <div className="stat-label">Unread</div>
+            <div className="stat-sub">Across your mailbox</div>
+          </div>
+        </div>
+        <div className="stat-cell">
+          <div className="stat-num">{data.metrics.pending_decisions}</div>
+          <div>
+            <div className="stat-label">Need your decision</div>
+            <div className="stat-sub">Approvals and choices</div>
+          </div>
+        </div>
+        <div className="stat-cell">
+          <div className="stat-num">{data.metrics.active_tasks}</div>
+          <div>
+            <div className="stat-label">Tasks in progress</div>
+            <div className="stat-sub">Delegated to the Agent</div>
+          </div>
+        </div>
+        <div className="stat-cell">
+          <div className="stat-num">{data.metrics.completed_today}</div>
+          <div>
+            <div className="stat-label">Delivered</div>
+            <div className="stat-sub">Completed tasks</div>
+          </div>
+        </div>
       </section>
 
       <div className="brief-grid">
         <section>
           <div className="section-head">
-            <h2>需要你决策</h2>
-            {decisions.length > 0 && <span className="pill pill-warn">{decisions.length} 项需确认</span>}
+            <h2>Needs your decision</h2>
+            <EnvLabel env={data.environment} />
           </div>
-          {decisions.length === 0 && (
+          {data.decisions.length === 0 ? (
             <div className="empty-card">
-              <img className="empty-motif only-night" src="assets/asset_orbit_motif.png" alt="" aria-hidden="true" />
-              <img className="empty-motif only-day" src="assets/asset_orbit_motif_day.png" alt="" aria-hidden="true" />
-              全部处理完了。Agent 会继续盯着新邮件，有需要决定的事会放在这里。
+              <img className="empty-motif only-night" src="assets/empty-decisions-dark.png" alt="" />
+              <img className="empty-motif only-day" src="assets/empty-decisions-light.png" alt="" />
+              Nothing needs your decision right now. New approvals and choices will appear here.
+            </div>
+          ) : (
+            <div className="card-list">
+              {data.decisions.map((d) => {
+                const open = openId === d.id;
+                return (
+                  <article key={d.id} className="decision-card">
+                    <button className="decision-main" onClick={() => setOpenId(open ? null : d.id)} aria-expanded={open}>
+                      <img className="decision-motif only-night" src="assets/empty-decisions-dark.png" alt="" />
+                      <img className="decision-motif only-day" src="assets/empty-decisions-light.png" alt="" />
+                      <span className="decision-main-text">
+                        <span className="decision-title">{d.title}</span>
+                        <span className="decision-desc">{d.description}</span>
+                        <span className="decision-source">
+                          {d.source_label} · {timeAgo(d.created_at)}
+                        </span>
+                      </span>
+                      <span className={`decision-arrow${open ? ' up' : ''}`}>
+                        <ChevronDown size={17} />
+                      </span>
+                    </button>
+                    {open && (
+                      <div className="decision-detail">
+                        <p className="decision-context">{d.description}</p>
+                        <div className="btn-row">
+                          {d.kind === 'choose_option' ? (
+                            <>
+                              <button
+                                className="btn btn-primary"
+                                disabled={acting === d.id}
+                                onClick={() => navigate(`/tasks/${d.task_id}`)}
+                              >
+                                Choose in Task Progress <ArrowRight size={14} />
+                              </button>
+                              <button
+                                className="btn btn-ghost"
+                                disabled={acting === d.id}
+                                onClick={() => actOnDecision(d, 'reject')}
+                              >
+                                Pause task
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button className="btn btn-primary" disabled={acting === d.id} onClick={() => actOnDecision(d, 'approve')}>
+                                {d.kind === 'review_item' ? 'Approve & send' : 'Approve'}
+                              </button>
+                              <button className="btn btn-dark" disabled={acting === d.id} onClick={() => navigate(d.kind === 'review_item' ? '/review' : `/tasks/${d.task_id}`)}>
+                                Review first
+                              </button>
+                              <button className="btn btn-ghost" disabled={acting === d.id} onClick={() => actOnDecision(d, 'reject')}>
+                                Reject
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </article>
+                );
+              })}
             </div>
           )}
-          <div className="card-list">
-            {decisions.map((d, i) => {
-              const tag = DECISION_TAGS[i % DECISION_TAGS.length];
-              const open = openId === d.id;
-              return (
-                <article key={d.id} className={`decision-card ${leaving === d.id ? 'leaving' : ''} ${open ? 'open' : ''}`}>
-                  <button className="decision-main" onClick={() => setOpenId(open ? null : d.id)}>
-                    <img className="decision-motif only-night" src="assets/asset_orbit_motif.png" alt="" aria-hidden="true" />
-                    <img className="decision-motif only-day" src="assets/asset_orbit_motif_day.png" alt="" aria-hidden="true" />
-                    <span className="decision-main-text">
-                      <span className="decision-title">{d.title}</span>
-                      <span className="decision-desc">{d.recommendation}</span>
-                      <span className="decision-source">{d.source}</span>
-                    </span>
-                    <span className={`pill ${tag.cls}`}>{tag.label}</span>
-                    <span className={`decision-arrow ${open ? 'up' : ''}`}>
-                      <IconArrowRight size={16} />
-                    </span>
-                  </button>
-                  {open && (
-                    <div className="decision-detail">
-                      <p className="decision-context">{d.context}</p>
-                      {d.draft && (
-                        <div className="mail-preview">
-                          <div className="mail-preview-head">
-                            <span>Agent 草稿</span>
-                          </div>
-                          <pre className="tone-body">{d.draft}</pre>
-                        </div>
-                      )}
-                      {editing === d.id ? (
-                        <div className="edit-box">
-                          <textarea value={editText} onChange={(e) => setEditText(e.target.value)} rows={8} />
-                          <div className="btn-row">
-                            <button className="btn btn-primary" onClick={() => act(d.id, 'approve', editText)}>
-                              保存并发送
-                            </button>
-                            <button className="btn btn-ghost" onClick={() => setEditing(null)}>
-                              取消
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="btn-row">
-                          <button className="btn btn-primary" onClick={() => act(d.id, 'approve')}>
-                            批准发送
-                          </button>
-                          {d.draft && (
-                            <button
-                              className="btn btn-dark"
-                              onClick={() => {
-                                setEditing(d.id);
-                                setEditText(d.draft ?? '');
-                              }}
-                            >
-                              编辑草稿
-                            </button>
-                          )}
-                          <button className="btn btn-dark" onClick={() => act(d.id, 'self')}>
-                            我自己处理
-                          </button>
-                          <button className="btn btn-ghost" onClick={() => act(d.id, 'ignore')}>
-                            忽略
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </article>
-              );
-            })}
-          </div>
         </section>
 
         <section className="panel agent-panel">
           <div className="section-head">
-            <h2>Agent 正在推进</h2>
-            <span className="pill pill-accent live-pill">LIVE</span>
+            <h2>Agent is handling</h2>
+            <button className="link-btn" onClick={() => navigate('/tasks')}>
+              View all
+            </button>
           </div>
           <div className="agent-rows">
-            {taskRunning && activeTask && (
-              <button className="agent-row clickable" onClick={goTask}>
-                <span className="agent-dot dot-accent" />
+            {data.active_tasks.length === 0 && <div className="empty-mini">No active tasks. Delegate something new.</div>}
+            {data.active_tasks.map((t) => (
+              <button key={t.id} className="agent-row clickable" onClick={() => navigate(`/tasks/${t.id}`)}>
+                <span className={`agent-dot ${DOT[t.status] ?? 'dot-gray'}`} />
                 <span className="agent-row-main">
-                  <span className="agent-row-title">{activeTask.title}</span>
+                  <span className="agent-row-title">{t.title}</span>
                   <span className="agent-row-meta">
-                    当前步骤：{activeTask.plan.steps[Math.min(activeTask.current, activeTask.plan.steps.length - 1)].label}
+                    <span className="mono">{t.display_id}</span> · {t.status.replace(/_/g, ' ')}
                   </span>
                   <span className="progress">
-                    <span
-                      className="progress-bar"
-                      style={{ width: `${Math.round((activeTask.current / activeTask.plan.steps.length) * 100)}%` }}
-                    />
+                    <span className="progress-bar" style={{ width: `${t.progress_percent}%` }} />
                   </span>
                 </span>
-                <span className="agent-pct">
-                  {Math.round((activeTask.current / activeTask.plan.steps.length) * 100)}%
-                </span>
+                <span className="agent-pct">{t.progress_percent}%</span>
               </button>
-            )}
-            {seeded.map((s, i) => (
-              <div key={s.id} className="agent-row">
-                <span className={`agent-dot ${DOT_CLASSES[i % DOT_CLASSES.length]}`} />
-                <span className="agent-row-main">
-                  <span className="agent-row-title">{s.title}</span>
-                  <span className="agent-row-meta">{s.stepLabel} · 正在执行</span>
-                  <span className="progress">
-                    <span
-                      className={`progress-bar ${DOT_CLASSES[i % DOT_CLASSES.length]}`}
-                      style={{ width: `${s.progress}%` }}
-                    />
-                  </span>
-                </span>
-                <span className="agent-pct">{s.progress}%</span>
-              </div>
             ))}
-            {!taskRunning && seeded.length === 0 && <div className="empty-mini">暂无进行中的任务</div>}
           </div>
-          <div className="panel-foot-note">所有外发操作需你批准 · 可随时手动接管</div>
         </section>
       </div>
 
       <div className="brief-bottom">
         <section className="panel feed-panel">
           <div className="section-head">
-            <h2>已完成</h2>
-            <button className="link-btn" onClick={goReview}>
-              去待审阅
+            <h2>Recent mail</h2>
+            <button className="link-btn" onClick={() => navigate('/inbox')}>
+              Open inbox
             </button>
           </div>
-          <div className="feed">
-            {doneFeed.map((item) => (
-              <div key={item.id} className="feed-item">
-                <span className="feed-check">
-                  <IconCheck size={13} />
-                </span>
-                <span className="feed-text">{item.text}</span>
-                <span className="feed-link">{item.output}</span>
-                <span className="feed-time">{item.time}</span>
-              </div>
-            ))}
-          </div>
+          {data.recent_messages.length === 0 && <div className="empty-mini">No recent messages.</div>}
+          {data.recent_messages.map((msg) => (
+            <div key={msg.id} className="feed-item">
+              <span className="feed-check" style={msg.is_read ? { background: 'var(--s2)', color: 'var(--t4)' } : undefined}>
+                <Check size={12} />
+              </span>
+              <span className="feed-text">
+                <strong>{msg.from.name ?? msg.from.email}</strong> — {msg.subject}
+              </span>
+              <button className="feed-link" onClick={() => navigate(`/inbox?message=${msg.id}`)}>
+                View
+              </button>
+              <span className="feed-time">{fmtTime(msg.created_at)}</span>
+            </div>
+          ))}
         </section>
 
-        <section className="panel feed-panel">
-          <div className="section-head">
-            <h2>审计日志</h2>
-            <span className="section-note">全部动作可追溯</span>
-          </div>
-          <div className="feed">
-            {activity.slice(0, 6).map((a) => (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+          <section className="panel feed-panel">
+            <div className="section-head">
+              <h2>Completed &amp; activity</h2>
+            </div>
+            {data.activity.length === 0 && <div className="empty-mini">No activity yet.</div>}
+            {data.activity.slice(0, 6).map((a) => (
               <div key={a.id} className="feed-item">
-                <span className="feed-time mono">{a.time}</span>
+                <span className="feed-check">
+                  <Check size={12} />
+                </span>
                 <span className="feed-text">{a.text}</span>
+                <span className="feed-time">{timeAgo(a.created_at)}</span>
               </div>
             ))}
-          </div>
-        </section>
+          </section>
+
+          <section className="panel feed-panel">
+            <div className="section-head">
+              <h2>Your to-dos</h2>
+              <span className="section-note">{data.todos.filter((t) => t.status === 'open').length} open</span>
+            </div>
+            {data.todos.map((t) => (
+              <div key={t.id} className="feed-item">
+                <button
+                  className="feed-check"
+                  style={t.status === 'completed' ? undefined : { background: 'var(--s2)', color: 'var(--t4)' }}
+                  onClick={() => toggleTodo(t)}
+                  aria-label={t.status === 'completed' ? 'Reopen to-do' : 'Complete to-do'}
+                >
+                  <Check size={12} />
+                </button>
+                <span className="feed-text" style={t.status === 'completed' ? { textDecoration: 'line-through', color: 'var(--t4)' } : undefined}>
+                  {t.title}
+                </span>
+                {t.due_at && <span className="feed-time">{fmtTime(t.due_at)}</span>}
+              </div>
+            ))}
+            <div className="inline-form" style={{ marginTop: 12 }}>
+              <div className="field">
+                <input
+                  value={newTodo}
+                  onChange={(e) => setNewTodo(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && addTodo()}
+                  placeholder="Add a to-do…"
+                  aria-label="New to-do"
+                />
+              </div>
+              <button className="btn btn-dark" onClick={addTodo}>
+                <Plus size={14} /> Add
+              </button>
+            </div>
+          </section>
+        </div>
       </div>
 
-      <div className="view-footnote">任务记录已同步 · 所有外发操作在授权范围内执行</div>
+      <p className="view-footnote">
+        {data.environment === 'demo'
+          ? 'Demo mailbox data — realistic sample content. Sends are simulated and stored in Sent.'
+          : 'Live mailbox data.'}{' '}
+        Briefing generated {timeAgo(data.generated_at)}.
+      </p>
     </div>
   );
 }

@@ -1,357 +1,187 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  ActivityEntry,
-  Autonomy,
-  Decision,
-  DoneItem,
-  Draft,
-  Email,
-  INITIAL_ACTIVITY,
-  INITIAL_DECISIONS,
-  INITIAL_DONE,
-  INITIAL_DRAFTS,
-  EMAILS,
-  TaskPlan,
-  ViewKey,
-  buildPlan,
-} from './data';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { api, connectWs, type Briefing as BriefingData, type Me, type OnboardingStatus } from './lib/api';
+import { AppCtx, type ComposerOpts } from './lib/appctx';
+import { ToastProvider, navigate, useRoute } from './lib/ui';
 import Sidebar from './components/Sidebar';
 import Topbar from './components/Topbar';
+import Composer from './components/Composer';
+import { ForgotPasswordPage, LoginPage, RegisterPage } from './components/Auth';
+import Onboarding from './components/Onboarding';
 import Briefing from './components/Briefing';
 import Delegate from './components/Delegate';
-import TaskProgress, { TaskState } from './components/TaskProgress';
-import Review from './components/Review';
+import TaskProgress from './components/TaskProgress';
 import Inbox from './components/Inbox';
+import Review from './components/Review';
+import Automations from './components/Automations';
+import Archive from './components/Archive';
+import Settings from './components/Settings';
 
-let uid = 100;
-const nextId = (p: string) => `${p}${++uid}`;
+type Boot = 'loading' | 'anon' | 'onboarding' | 'ready';
+type Theme = 'day' | 'night';
 
-function nowTime(): string {
-  const d = new Date();
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-}
-
-export interface SeededTask {
-  id: string;
-  title: string;
-  stepLabel: string;
-  progress: number;
-  cap: number;
+function initialTheme(): Theme {
+  try {
+    const saved = localStorage.getItem('intenda-theme');
+    if (saved === 'day' || saved === 'night') return saved;
+  } catch { /* ignore */ }
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'night' : 'day';
 }
 
 export default function App() {
-  const [theme, setTheme] = useState<'night' | 'day'>(() => {
+  return (
+    <ToastProvider>
+      <Shell />
+    </ToastProvider>
+  );
+}
+
+function Shell() {
+  const route = useRoute();
+  const [boot, setBoot] = useState<Boot>('loading');
+  const [me, setMe] = useState<Me | null>(null);
+  const [theme, setThemeState] = useState<Theme>(initialTheme);
+  const [badges, setBadges] = useState({ review: 0, tasks: 0, decisions: 0, inbox_unread: 0 });
+  const [environment, setEnvironment] = useState<'demo' | 'live'>('demo');
+  const [agentAvailable, setAgentAvailable] = useState(false);
+  const [composer, setComposer] = useState<ComposerOpts | null>(null);
+  const badgeTimer = useRef<number | undefined>(undefined);
+
+  const applyTheme = useCallback((t: Theme) => {
+    document.documentElement.dataset.theme = t;
     try {
-      return localStorage.getItem('intenda-theme') === 'day' ? 'day' : 'night';
-    } catch {
-      return 'night';
-    }
-  });
+      localStorage.setItem('intenda-theme', t);
+    } catch { /* ignore */ }
+  }, []);
 
-  /* 主题落在 <html data-theme> 上驱动 CSS 变量，并持久化到 localStorage */
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
+    applyTheme(theme);
+  }, [theme, applyTheme]);
+
+  const setTheme = useCallback(
+    (t: Theme) => {
+      setThemeState(t);
+      applyTheme(t);
+    },
+    [applyTheme],
+  );
+
+  const refreshBadges = useCallback(() => {
+    api<BriefingData>('/api/v1/briefing/today')
+      .then((b) => {
+        setBadges(b.badges);
+        setEnvironment(b.environment);
+      })
+      .catch(() => {});
+    api<{ available: boolean }>('/api/v1/agent/status')
+      .then((s) => setAgentAvailable(s.available))
+      .catch(() => {});
+  }, []);
+
+  const bootstrap = useCallback(async () => {
     try {
-      localStorage.setItem('intenda-theme', theme);
+      const meData = await api<{ user: Me }>('/api/v1/auth/me');
+      setMe(meData.user);
+      // Server appearance is authoritative once signed in (spec 1.8).
+      api<{ settings: { appearance: { mode: string } } }>('/api/v1/settings')
+        .then((s) => {
+          const mode = s.settings.appearance.mode;
+          if (mode === 'day' || mode === 'night') setTheme(mode);
+        })
+        .catch(() => {});
+      const ob = await api<OnboardingStatus>('/api/v1/onboarding/status');
+      if (ob.state === 'READY') {
+        setBoot('ready');
+        refreshBadges();
+      } else {
+        setBoot('onboarding');
+      }
     } catch {
-      /* 隐私模式下写入失败不影响使用 */
+      setMe(null);
+      setBoot('anon');
     }
-  }, [theme]);
+  }, [refreshBadges, setTheme]);
 
-  const toggleTheme = useCallback(() => {
-    setTheme((t) => (t === 'night' ? 'day' : 'night'));
-  }, []);
-
-  const [view, setView] = useState<ViewKey>('briefing');
-  const [decisions, setDecisions] = useState<Decision[]>(INITIAL_DECISIONS);
-  const [drafts, setDrafts] = useState<Draft[]>(INITIAL_DRAFTS);
-  const [doneFeed, setDoneFeed] = useState<DoneItem[]>(INITIAL_DONE);
-  const [activity, setActivity] = useState<ActivityEntry[]>(INITIAL_ACTIVITY);
-  const [emails, setEmails] = useState<Email[]>(EMAILS);
-  const [task, setTask] = useState<TaskState | null>(null);
-  const [delegatePrefill, setDelegatePrefill] = useState('');
-  const [inboxQuery, setInboxQuery] = useState('');
-  const [seeded, setSeeded] = useState<SeededTask[]>([
-    { id: 's1', title: '整理本周会议邮件为待办', stepLabel: '正在提取时间与参会人', progress: 46, cap: 92 },
-    { id: 's2', title: '汇总 10 月发票并核对金额', stepLabel: '正在核对第 3 张发票', progress: 68, cap: 95 },
-  ]);
-  const timerRef = useRef<number | null>(null);
-
-  const log = useCallback((text: string) => {
-    setActivity((prev) => [{ id: nextId('a'), time: nowTime(), text }, ...prev]);
-  }, []);
-
-  /* 顶栏搜索沿用收件箱的搜索行为：在其他视图输入时跳到收件箱看结果 */
-  const handleTopQuery = useCallback(
-    (q: string) => {
-      setInboxQuery(q);
-      if (q.trim() && view !== 'inbox') setView('inbox');
-    },
-    [view],
-  );
-
-  /* 简报里两个进行中任务的进度缓慢推进（展示用） */
   useEffect(() => {
-    const t = window.setInterval(() => {
-      setSeeded((prev) =>
-        prev.map((s) => (s.progress < s.cap ? { ...s, progress: Math.min(s.cap, s.progress + 1) } : s)),
-      );
-    }, 2600);
-    return () => window.clearInterval(t);
-  }, []);
+    bootstrap();
+  }, [bootstrap]);
 
-  /* ---------- 决策卡 ---------- */
-  const resolveDecision = useCallback(
-    (id: string, action: 'approve' | 'self' | 'ignore', editedDraft?: string) => {
-      const d = decisions.find((x) => x.id === id);
-      if (!d) return;
-      setDecisions((prev) => prev.filter((x) => x.id !== id));
-      if (action === 'approve') {
-        log(`你批准了「${d.title}」${editedDraft ? '（含你的编辑）' : ''}，Agent 已执行发送`);
-        setDoneFeed((prev) => [
-          { id: nextId('c'), text: `${d.title}，已按建议处理`, output: '查看产出', time: nowTime() },
-          ...prev,
-        ]);
-      } else if (action === 'self') {
-        log(`「${d.title}」已转由你手动处理，Agent 停止跟进`);
-      } else {
-        log(`你忽略了「${d.title}」，Agent 不再提醒`);
-      }
-    },
-    [decisions, log],
-  );
-
-  /* ---------- 任务引擎 ---------- */
-  const launchTask = useCallback(
-    (intent: string, autonomy: Autonomy) => {
-      const plan: TaskPlan = buildPlan(intent);
-      const steps = plan.steps.map((s) => {
-        if (autonomy === 'fullauto' && s.gate === 'tone') return { ...s, gate: 'send' as const };
-        return s;
-      });
-      setTask({
-        id: nextId('t'),
-        title: intent,
-        intent,
-        autonomy,
-        plan: { ...plan, steps },
-        current: 0,
-        status: 'running',
-        gate: null,
-        tone: null,
-        finalAction: null,
-      });
-      log(`你发起了任务「${intent}」，授权级别：${
-        autonomy === 'stepwise' ? '每一步问我' : autonomy === 'keypoints' ? '关键节点问我' : '全自动，发前确认'
-      }`);
-      setView('task');
-    },
-    [log],
-  );
-
-  const completeStepAndContinue = useCallback((t: TaskState): TaskState => {
-    const next = t.current + 1;
-    if (next >= t.plan.steps.length) {
-      return { ...t, current: next, status: 'done', gate: null };
-    }
-    return { ...t, current: next, status: 'running', gate: null };
-  }, []);
-
-  // 定时推进：每 1.8 秒走一步
+  // Live updates: any task/review/sync event refreshes badges.
   useEffect(() => {
-    if (!task || task.status !== 'running') return;
-    timerRef.current = window.setTimeout(() => {
-      setTask((prev) => {
-        if (!prev || prev.status !== 'running') return prev;
-        const step = prev.plan.steps[prev.current];
-        if (!step) return { ...prev, status: 'done' };
-        if (step.gate) {
-          return { ...prev, status: 'waiting', gate: step.gate };
-        }
-        if (prev.autonomy === 'stepwise') {
-          return { ...prev, status: 'waiting', gate: 'step' };
-        }
-        return completeStepAndContinue(prev);
-      });
-    }, 1800);
-    return () => {
-      if (timerRef.current) window.clearTimeout(timerRef.current);
-    };
-  }, [task, completeStepAndContinue]);
-
-  const resolveGate = useCallback(
-    (payload: { tone?: 'formal' | 'concise'; sendAction?: 'send' | 'save' }) => {
-      if (!task) return;
-      let t: TaskState = { ...task, gate: null };
-      if (payload.tone) {
-        t = { ...t, tone: payload.tone };
-        log(`任务「${t.title}」：你选择了${payload.tone === 'formal' ? '正式版' : '简洁版'}草稿，Agent 继续执行`);
+    if (boot !== 'ready') return;
+    const close = connectWs((event) => {
+      if (typeof event?.type === 'string' && event.type !== 'server.heartbeat') {
+        window.clearTimeout(badgeTimer.current);
+        badgeTimer.current = window.setTimeout(refreshBadges, 400);
       }
-      if (payload.sendAction === 'send') {
-        t = { ...t, finalAction: 'sent' };
-        log(`任务「${t.title}」：你确认发送，Agent 已发送给 ${t.plan.draftTo}`);
-      } else if (payload.sendAction === 'save') {
-        t = { ...t, finalAction: 'saved' };
-        log(`任务「${t.title}」：产出已存入待审阅，未发送`);
-        setDrafts((ds) => [
-          {
-            id: nextId('dr'),
-            to: t.plan.draftTo,
-            subject: t.plan.draftSubject,
-            body: t.tone === 'formal' ? t.plan.toneFormal : t.plan.toneConcise,
-            source: `由任务「${t.title}」生成`,
-            status: 'pending',
-          },
-          ...ds,
-        ]);
-      }
-      const done = completeStepAndContinue(t);
-      setTask(done);
-    },
-    [task, completeStepAndContinue, log],
-  );
+    });
+    return close;
+  }, [boot, refreshBadges]);
 
-  /* 任务完成时统一记账（无论经由决策点还是自动跑完） */
-  const doneLoggedRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (task && task.status === 'done' && doneLoggedRef.current !== task.id) {
-      doneLoggedRef.current = task.id;
-      log(`任务「${task.title}」已完成：${task.plan.resultSummary}`);
-      setDoneFeed((prevFeed) => [
-        { id: nextId('c'), text: `任务完成：${task.title}`, output: '查看产出', time: nowTime() },
-        ...prevFeed,
-      ]);
-    }
-  }, [task, log]);
-
-  const taskControl = useCallback(
-    (action: 'pause' | 'resume' | 'takeover' | 'cancel') => {
-      if (!task) return;
-      if (action === 'pause') {
-        log(`任务「${task.title}」已暂停`);
-        setTask({ ...task, status: 'paused' });
-      } else if (action === 'resume') {
-        log(`任务「${task.title}」继续执行`);
-        setTask({ ...task, status: 'running', gate: null });
-      } else if (action === 'takeover') {
-        log(`你接管了任务「${task.title}」，Agent 已停止`);
-        setTask({ ...task, status: 'takenover' });
-      } else {
-        log(`任务「${task.title}」已终止`);
-        setTask({ ...task, status: 'cancelled' });
-      }
-    },
-    [task, log],
-  );
-
-  const taskFinalAction = useCallback(
-    (action: 'send' | 'save', editedBody?: string) => {
-      if (!task) return;
-      if (action === 'send') {
-        log(`任务「${task.title}」：成果已发送给 ${task.plan.draftTo}${editedBody ? '（含你的修改）' : ''}`);
-        setTask({ ...task, finalAction: 'sent' });
-      } else {
-        log(`任务「${task.title}」：成果已存入待审阅`);
-        setDrafts((ds) => [
-          {
-            id: nextId('dr'),
-            to: task.plan.draftTo,
-            subject: task.plan.draftSubject,
-            body: editedBody ?? (task.tone === 'formal' ? task.plan.toneFormal : task.plan.toneConcise),
-            source: `由任务「${task.title}」生成`,
-            status: 'pending',
-          },
-          ...ds,
-        ]);
-        setTask({ ...task, finalAction: 'saved' });
-      }
-    },
-    [task, log],
-  );
-
-  /* ---------- 草稿审阅 ---------- */
-  const draftAction = useCallback(
-    (id: string, action: 'send' | 'discard' | 'edit', body?: string) => {
-      const d = drafts.find((x) => x.id === id);
-      if (!d) return;
-      if (action === 'send') {
-        setDrafts((prev) => prev.map((x) => (x.id === id ? { ...x, status: 'sent' } : x)));
-        log(`你批准发送了草稿「${d.subject}」给 ${d.to}`);
-      } else if (action === 'discard') {
-        setDrafts((prev) => prev.filter((x) => x.id !== id));
-        log(`你丢弃了草稿「${d.subject}」`);
-      } else if (action === 'edit' && body !== undefined) {
-        setDrafts((prev) => prev.map((x) => (x.id === id ? { ...x, body } : x)));
-        log(`你编辑了草稿「${d.subject}」`);
-      }
-    },
-    [drafts, log],
-  );
-
-  /* ---------- 收件箱 ---------- */
-  const markRead = useCallback((id: string) => {
-    setEmails((prev) => prev.map((e) => (e.id === id ? { ...e, unread: false } : e)));
+  const logout = useCallback(async () => {
+    try {
+      await api('/api/v1/auth/logout', { method: 'POST', body: {} });
+    } catch { /* session already gone */ }
+    setMe(null);
+    setBoot('anon');
+    navigate('/login');
   }, []);
 
-  const delegateFromEmail = useCallback((e: Email) => {
-    setDelegatePrefill(`跟进这封来自${e.from}的邮件：${e.subject}`);
-    setView('delegate');
-  }, []);
+  const openComposer = useCallback((opts?: ComposerOpts) => setComposer(opts ?? { mode: 'new' }), []);
 
-  const counts = useMemo(
-    () => ({
-      decisions: decisions.length,
-      review: drafts.filter((d) => d.status === 'pending').length,
-      unread: emails.filter((e) => e.unread).length,
-      taskActive: task && (task.status === 'running' || task.status === 'waiting' || task.status === 'paused') ? 1 : 0,
-    }),
-    [decisions, drafts, emails, task],
-  );
+  if (boot === 'loading') {
+    return (
+      <div className="auth-shell">
+        <div className="auth-card">
+          <div className="skeleton" style={{ height: 180 }} />
+        </div>
+      </div>
+    );
+  }
+
+  if (boot === 'anon') {
+    if (route === '/register') return <RegisterPage onAuthed={bootstrap} />;
+    if (route === '/forgot-password') return <ForgotPasswordPage />;
+    return <LoginPage onAuthed={bootstrap} />;
+  }
+
+  if (boot === 'onboarding' || !me) {
+    return <Onboarding onReady={bootstrap} />;
+  }
+
+  let page: React.ReactNode;
+  if (route === '/briefing' || route === '/') page = <Briefing />;
+  else if (route === '/delegate') page = <Delegate />;
+  else if (route === '/tasks') page = <TaskProgress />;
+  else if (route.startsWith('/tasks/')) page = <TaskProgress taskId={route.slice('/tasks/'.length)} />;
+  else if (route === '/inbox') page = <Inbox />;
+  else if (route === '/review') page = <Review />;
+  else if (route === '/automations') page = <Automations />;
+  else if (route === '/archive') page = <Archive />;
+  else if (route === '/settings') page = <Settings />;
+  else page = <Briefing />;
 
   return (
-    <div className="app">
-      <Sidebar view={view} setView={setView} counts={counts} />
-      <main className="main">
-        <Topbar view={view} query={inboxQuery} onQuery={handleTopQuery} theme={theme} onToggleTheme={toggleTheme} />
-        {view === 'briefing' && (
-          <Briefing
-            decisions={decisions}
-            resolveDecision={resolveDecision}
-            seeded={seeded}
-            activeTask={task}
-            doneFeed={doneFeed}
-            activity={activity}
-            goTask={() => setView('task')}
-            goReview={() => setView('review')}
-            reviewCount={counts.review}
-            mailTotal={emails.length}
-            unreadCount={counts.unread}
-          />
-        )}
-        {view === 'delegate' && (
-          <Delegate prefill={delegatePrefill} onLaunch={launchTask} hasActiveTask={counts.taskActive > 0} />
-        )}
-        {view === 'task' && (
-          <TaskProgress
-            task={task}
-            resolveGate={resolveGate}
-            control={taskControl}
-            finalAction={taskFinalAction}
-            goDelegate={() => setView('delegate')}
-            goInbox={() => setView('inbox')}
-          />
-        )}
-        {view === 'review' && <Review drafts={drafts} draftAction={draftAction} />}
-        {view === 'inbox' && (
-          <Inbox
-            emails={emails}
-            markRead={markRead}
-            delegateFromEmail={delegateFromEmail}
-            log={log}
-            query={inboxQuery}
-          />
-        )}
-      </main>
-    </div>
+    <AppCtx.Provider
+      value={{
+        me,
+        theme,
+        setTheme,
+        badges,
+        refreshBadges,
+        environment,
+        agentAvailable,
+        openComposer,
+        logout,
+      }}
+    >
+      <div className="app">
+        <Sidebar />
+        <div className="main">
+          <Topbar />
+          {page}
+        </div>
+      </div>
+      {composer && <Composer opts={composer} onClose={() => setComposer(null)} />}
+    </AppCtx.Provider>
   );
 }
