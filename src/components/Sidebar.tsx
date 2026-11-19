@@ -26,10 +26,22 @@ export default function Sidebar({ view, setView, counts }: Props) {
   return (
     <aside className="sidebar">
       <div className="brand">
-        <div className="brand-mark">回</div>
+        <div className="brand-mark" aria-hidden="true">
+          <svg width="46" height="30" viewBox="0 0 72 40" fill="none">
+            <defs>
+              <linearGradient id="intendaMetal" x1="0" y1="0" x2="0" y2="40" gradientUnits="userSpaceOnUse">
+                <stop offset="0" stopColor="#EDF1F4" />
+                <stop offset="0.45" stopColor="#C5CED3" />
+                <stop offset="1" stopColor="#8E9AA1" />
+              </linearGradient>
+            </defs>
+            <polygon points="13,7 25,20 13,33 1,20" fill="url(#intendaMetal)" />
+            <polygon points="30,29 38,26 51,4 57,14 68,19 59,22 54,33 49,23 41,27" fill="url(#intendaMetal)" />
+          </svg>
+        </div>
         <div className="brand-text">
-          <div className="brand-name">回声 Echo</div>
-          <div className="brand-sub">Agent Native 邮箱</div>
+          <div className="brand-name">Intenda</div>
+          <div className="brand-sub">意达 · AGENT-NATIVE EMAIL</div>
         </div>
       </div>
 
