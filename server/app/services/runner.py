@@ -254,10 +254,24 @@ async def _process_task(db, task: m.Task) -> None:
         return
 
     if nxt.status == "waiting_user":
-        # Waiting on a decision; nothing to do until it resolves.
-        return
+        # If the gate decision was approved, release the step and continue.
+        decision = db.get(m.Decision, nxt.approval_id) if nxt.approval_id else None
+        if decision is not None and decision.status == "approved":
+            nxt.status = "pending"
+            db.commit()
+        else:
+            # Still waiting on a decision; nothing to do until it resolves.
+            return
 
-    gate = _gate_required(task, nxt)
+    gate = None
+    if nxt.approval_id:
+        prior = db.get(m.Decision, nxt.approval_id)
+        if prior is not None and prior.status == "approved":
+            gate = None  # this step's gate was already approved by the user
+        else:
+            gate = _gate_required(task, nxt)
+    else:
+        gate = _gate_required(task, nxt)
     if gate is not None:
         existing = (
             db.query(m.Decision)

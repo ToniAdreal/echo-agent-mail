@@ -86,3 +86,57 @@ Build follows BUILD_BRIEF_V5.md (process) and Intenda-Product-Specification-v1.0
   threads.
 - Compose/reply/forward create a draft plus a backing draft message so the
   inventory's `POST /emails/{messageId}/send` shape works unchanged.
+
+## Stage 3 — agent SSE + tasks + WebSocket (done)
+- Agent endpoints: conversations CRUD, status, retry, and POST messages with
+  SSE streaming (message.started/delta/annotation/completed/error/heartbeat).
+  The provider is called only from the backend via the OpenAI-compatible API;
+  the plan JSON block in a model reply is parsed server-side and emitted as a
+  plan annotation. With no key configured, the deterministic Section 5.5
+  fallback runs: the user message is stored with status model_unavailable, a
+  notice with the exact fallback wording is stored, no task/draft/side effect
+  is created. Per-user rate limits (10/min, 100/day, configurable) enforced.
+- Tasks: create only from a confirmed plan + one of the three authorization
+  modes; list/detail/events (sequence-based replay); pause/resume (resume
+  requires acknowledge_summary), takeover/return-control, terminate
+  (confirmation required, completed work preserved), retry of failed steps.
+  Decisions: list + single-use resolve (repeated resolve returns the original
+  result). The in-process runner executes steps with server-side gate
+  enforcement: Confirm Every Step gates every step, Confirm at Key
+  Milestones gates milestone/high-risk steps, Fully Automatic but Confirm
+  Before Sending runs internal steps but a send step can only complete via
+  Review Queue approval. Step effects are deterministic operations over the
+  user's own mailbox data; drafts land in the Review Queue.
+- Review Queue: list/detail, PATCH with revision control (409 with latest on
+  conflict, edits mark the item modified), approve (confirm_send required,
+  idempotency honored, demo send simulated with the exact notice, linked
+  task send step completes), reject (linked task goes to needs_attention),
+  return-to-task.
+- Automations: CRUD + revision control, enable/disable, duplicate, manual
+  run with condition matching; actions summarize/create_todo/prepare_draft/
+  notify; runs persisted; a run with no matches is marked needs_attention;
+  automations can never send email.
+- Settings: GET/PATCH (profile, appearance mode persisted server-side,
+  agent preferences + default authorization mode, notifications, privacy),
+  JSON data export (job + download), delete demo data, account deletion
+  (password + typed DELETE confirmation, sessions revoked). Contacts and
+  to-dos CRUD. WebSocket /api/v1/ws with cookie auth, server.hello,
+  heartbeat, client.ping, client.task.watch.
+- Verified with TestClient: fallback SSE contains the exact Section 5.5
+  wording and stores user=model_unavailable + notice=failed; AG-2051
+  choose_option resolution completes the choice step, the runner drafts the
+  confirmation email into the Review Queue and the task completes; AG-2054
+  gates at its milestone; AG-2048 approve performs the simulated send and
+  completes the task at 100%; a new Confirm-Every-Step task gates before
+  step 1; automation run succeeds; appearance PATCH persists; WS hello and
+  heartbeat round-trip.
+
+### Stage 3 deviations / interpretation notes
+- Task step side effects (summaries, draft bodies) are produced by the
+  deterministic task engine from the approved plan and the selected mailbox
+  context, not by the chat model; the model is used for conversation and
+  plan generation only. This keeps delegated work inspectable and available
+  in the demo while the Section 5.5 rule (no fabricated model answers, no
+  side effects from failed model requests) is fully honored for Agent chat.
+- Extra endpoint POST /automations/{id}/duplicate supports the spec's
+  Automations page Duplicate action (not in the 7.4.9 inventory).

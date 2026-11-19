@@ -94,15 +94,27 @@ def create_app() -> FastAPI:
                     return JSONResponse(status_code=403, content=error_body(request, err))
         return await call_next(request)
 
+    from .routes import agent as agent_routes
     from .routes import auth as auth_routes
+    from .routes import automations as automations_routes
     from .routes import briefing as briefing_routes
     from .routes import mail as mail_routes
     from .routes import onboarding as onboarding_routes
+    from .routes import review as review_routes
+    from .routes import settings as settings_routes
+    from .routes import tasks as tasks_routes
+    from .routes import ws as ws_routes
 
     app.include_router(auth_routes.router)
     app.include_router(onboarding_routes.router)
     app.include_router(mail_routes.router)
     app.include_router(briefing_routes.router)
+    app.include_router(agent_routes.router)
+    app.include_router(tasks_routes.router)
+    app.include_router(review_routes.router)
+    app.include_router(automations_routes.router)
+    app.include_router(settings_routes.router)
+    app.include_router(ws_routes.router)
 
     @app.get("/health")
     def health():
