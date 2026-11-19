@@ -1,0 +1,353 @@
+"""Background runner: simulated demo sync + task step execution.
+
+Runs inside the FastAPI process (spec 7.1: background runner integrated into
+the same process for the demo workload). Step side effects are deterministic
+operations over the user's own mailbox data (read, summarize-by-extraction,
+draft from the approved plan, to-do, archive). Sending is never executed
+here: a send step completes only through Review Queue approval (spec 6.2).
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+from datetime import timezone
+
+from ..config import settings
+from ..db import SessionLocal
+from .. import models as m
+from ..helpers import get_onboarding
+from ..ws import manager
+from . import tasks_svc
+
+log = logging.getLogger("intenda.runner")
+
+SYNC_PHASES = [
+    ("connecting", 5),
+    ("reading_metadata", 25),
+    ("syncing_messages", 60),
+    ("building_threads", 85),
+    ("preparing_agent_context", 100),
+]
+
+
+async def _advance_syncs(db) -> None:
+    jobs = db.query(m.SyncJob).filter(m.SyncJob.status == "running").all()
+    duration_ms = max(500, 5 * settings.DEMO_SYNC_DELAY_MS)
+    for job in jobs:
+        started = job.started_at
+        if started is None:
+            continue
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        elapsed_ms = (m.now() - started).total_seconds() * 1000
+        frac = min(1.0, elapsed_ms / duration_ms)
+        total = job.total_count or 0
+        job.processed_count = int(total * frac)
+        phase = SYNC_PHASES[-1][0]
+        for name, upto in SYNC_PHASES:
+            if frac * 100 <= upto:
+                phase = name
+                break
+        job.phase = phase
+        account = db.get(m.MailAccount, job.mail_account_id)
+        if frac >= 1.0:
+            job.status = "completed"
+            job.phase = "completed"
+            job.processed_count = total
+            job.completed_at = m.now()
+            job.cursor_after = f"demo-cursor-{total}"
+            if account is not None:
+                account.status = "connected"
+                account.last_sync_at = m.now()
+                account.sync_cursor = job.cursor_after
+            user = db.get(m.User, job.user_id)
+            if user is not None:
+                ob = get_onboarding(db, user)
+                if ob.state == "SYNCING":
+                    ob.state = "READY"
+                    steps = list(ob.completed_steps or [])
+                    if "sync" not in steps:
+                        steps.append("sync")
+                        ob.completed_steps = steps
+            db.commit()
+            await manager.broadcast(job.user_id, "sync.completed", {
+                "job_id": job.id, "account_id": job.mail_account_id,
+                "counts": {"messages": total}, "completed_at": m.now().isoformat(),
+                "simulated": job.environment == "demo",
+            })
+        else:
+            db.commit()
+            await manager.broadcast(job.user_id, "sync.progress", {
+                "job_id": job.id, "phase": job.phase,
+                "processed": job.processed_count, "total": total,
+                "percent": round(frac * 100), "simulated": job.environment == "demo",
+            })
+
+
+def _gate_required(task: m.Task, step: m.TaskStep) -> str | None:
+    """Return the decision type if this step must wait for the user."""
+    if step.step_type == "wait_for_approval":
+        return "approve_step"
+    mode = task.authorization_mode
+    if mode == "confirm_every_step":
+        return "approve_step"
+    if mode == "confirm_milestones":
+        if (step.input_refs or {}).get("milestone") or step.risk_level == "high":
+            return "approve_milestone"
+    return None
+
+
+def _context_threads(db, task: m.Task) -> list[m.EmailThread]:
+    ids = (task.context_scope or {}).get("thread_ids") or []
+    threads = []
+    for tid in ids:
+        t = db.get(m.EmailThread, tid)
+        if t is not None and t.user_id == task.user_id:
+            threads.append(t)
+    return threads
+
+
+def _execute_step(db, task: m.Task, step: m.TaskStep, user: m.User) -> dict:
+    """Perform the step's internal effect and return output_refs."""
+    threads = _context_threads(db, task)
+    refs = step.input_refs or {}
+    if step.step_type == "read_context":
+        count = 0
+        for t in threads:
+            count += db.query(m.EmailMessage).filter(m.EmailMessage.thread_id == t.id).count()
+        return {"threads_read": len(threads), "messages_read": count}
+    if step.step_type == "summarize":
+        lines = []
+        for t in threads:
+            latest = (
+                db.query(m.EmailMessage)
+                .filter(m.EmailMessage.thread_id == t.id)
+                .order_by(m.EmailMessage.created_at.desc())
+                .first()
+            )
+            if latest is not None:
+                lines.append(f"{t.subject_normalized}: {(latest.snippet or '')[:160]}")
+        return {"summary": " ".join(lines)[:900] or "No messages in the selected context."}
+    if step.step_type == "draft_email":
+        account = (
+            db.query(m.MailAccount)
+            .filter(m.MailAccount.user_id == user.id, m.MailAccount.deleted_at.is_(None))
+            .first()
+        )
+        to_list = refs.get("to")
+        subject = refs.get("subject")
+        body = refs.get("body")
+        thread_id = threads[0].id if threads else None
+        if not to_list and threads:
+            others = [p for p in (threads[0].participants or []) if p.get("email") != account.email_address]
+            to_list = others[:1]
+        if not subject:
+            subject = f"Re: {threads[0].subject_normalized}" if threads else "Follow-up"
+        if not body:
+            chosen = refs.get("chosen_option_label")
+            goal_line = task.goal
+            body = (
+                f"Hi,\n\nFollowing up on {threads[0].subject_normalized if threads else 'our conversation'}.\n\n"
+                + (f"I would like to confirm {chosen}.\n\n" if chosen else "")
+                + "Please let me know if anything on your side needs adjusting, and I will take care of it right away.\n\nBest regards"
+            )
+            if goal_line:
+                body += f"\n\n(Context: {goal_line[:200]})"
+        draft, item = tasks_svc.create_review_draft(
+            db, user, account,
+            to_recipients=to_list or [], subject=subject, body=body,
+            thread_id=thread_id, task=task,
+            agent_note=f"Draft prepared by task {task.display_id} from the approved plan. Review, edit or reject it here; nothing is sent before your approval.",
+            source_refs={"thread_id": thread_id, "task_display_id": task.display_id},
+        )
+        return {"draft_id": draft.id, "review_id": item.id}
+    if step.step_type == "create_todo":
+        todo = m.Todo(
+            user_id=user.id,
+            source_task_id=task.id,
+            title=str(refs.get("title") or task.goal)[:200],
+            description=str(refs.get("description") or "")[:500] or None,
+            created_by="agent",
+        )
+        db.add(todo)
+        db.commit()
+        db.refresh(todo)
+        return {"todo_id": todo.id}
+    if step.step_type == "archive_email":
+        n = 0
+        for t in threads:
+            t.is_archived = True
+            n += 1
+        db.commit()
+        return {"threads_archived": n}
+    if step.step_type == "label_message":
+        return {"labelled": len(threads)}
+    if step.step_type == "custom_internal":
+        return {"note": refs.get("note") or "Internal step completed."}
+    return {"note": "Step completed."}
+
+
+async def _process_task(db, task: m.Task) -> None:
+    user = db.get(m.User, task.user_id)
+    if user is None:
+        return
+    if task.status == "queued":
+        task.status = "running"
+        task.started_at = task.started_at or m.now()
+        db.commit()
+        await tasks_svc.emit_task_event_async(db, task, "task.started", {"started_at": m.now().isoformat()})
+        return
+    steps = (
+        db.query(m.TaskStep)
+        .filter(m.TaskStep.task_id == task.id)
+        .order_by(m.TaskStep.sequence)
+        .all()
+    )
+    if not steps:
+        task.status = "completed"
+        task.progress_percent = 100
+        task.completed_at = m.now()
+        db.commit()
+        await tasks_svc.emit_task_event_async(db, task, "task.completed", {"completed_at": m.now().isoformat()})
+        return
+
+    # Handle a send step that is waiting on a Review Queue decision.
+    for step in steps:
+        if step.step_type == "send_email" and step.status in {"waiting_user", "pending", "ready"}:
+            review_id = (step.input_refs or {}).get("review_id")
+            item = db.get(m.ReviewItem, review_id) if review_id else None
+            if item is not None and item.status in {"approved", "sent"}:
+                step.status = "completed"
+                step.completed_at = m.now()
+                db.commit()
+            elif item is not None and item.status == "rejected":
+                step.status = "skipped"
+                db.commit()
+            elif step.status != "waiting_user":
+                # Park the task at the Review Queue gate.
+                step.status = "waiting_user"
+                task.status = "waiting_user"
+                task.current_step_id = step.id
+                db.commit()
+                await tasks_svc.emit_task_event_async(
+                    db, task, "task.waiting_user",
+                    {"reason": "Sending requires Review Queue approval", "decision_id": None},
+                )
+            return
+
+    nxt = next((s for s in steps if s.status in {"pending", "ready", "waiting_user"}), None)
+    done = sum(1 for s in steps if s.status in {"completed", "skipped"})
+    task.progress_percent = round(100 * done / len(steps))
+    if nxt is None:
+        if task.status != "completed":
+            task.status = "completed"
+            task.progress_percent = 100
+            task.completed_at = m.now()
+            db.commit()
+            await tasks_svc.emit_task_event_async(db, task, "task.completed", {"completed_at": m.now().isoformat()})
+            db.add(m.Notification(
+                user_id=user.id, type="task",
+                title=f"{task.display_id} completed",
+                body=task.goal[:160], resource_type="task", resource_id=task.id,
+            ))
+            db.commit()
+        return
+
+    if nxt.status == "waiting_user":
+        # Waiting on a decision; nothing to do until it resolves.
+        return
+
+    gate = _gate_required(task, nxt)
+    if gate is not None:
+        existing = (
+            db.query(m.Decision)
+            .filter(m.Decision.step_id == nxt.id, m.Decision.status == "pending")
+            .first()
+        )
+        if existing is None:
+            decision = m.Decision(
+                task_id=task.id, step_id=nxt.id, user_id=user.id,
+                decision_type=gate,
+                prompt=f"Approve this step: {nxt.title}",
+                options=[{"value": "approve", "label": "Approve"}, {"value": "reject", "label": "Reject"}],
+                status="pending",
+            )
+            db.add(decision)
+            db.flush()
+            nxt.status = "waiting_user"
+            nxt.approval_id = decision.id
+            task.status = "waiting_user"
+            task.current_step_id = nxt.id
+            db.commit()
+            await tasks_svc.emit_task_event_async(db, task, "task.waiting_user",
+                                                  {"reason": "Approval required", "decision_id": decision.id})
+            await tasks_svc.emit_task_event_async(db, task, "task.decision.required", {
+                "decision_id": decision.id, "decision_type": gate,
+                "summary": decision.prompt, "options": decision.options,
+            })
+        return
+
+    # Execute the step.
+    nxt.status = "running"
+    nxt.started_at = m.now()
+    task.current_step_id = nxt.id
+    db.commit()
+    await tasks_svc.emit_task_event_async(db, task, "task.step.started",
+                                          {"step_id": nxt.id, "sequence": nxt.sequence, "title": nxt.title})
+    try:
+        output = _execute_step(db, task, nxt, user)
+        nxt.output_refs = {**(nxt.output_refs or {}), **output}
+        nxt.status = "completed"
+        nxt.completed_at = m.now()
+        nxt.progress_percent = 100
+        db.commit()
+        await tasks_svc.emit_task_event_async(db, task, "task.step.completed",
+                                              {"step_id": nxt.id, "output_refs": output})
+        if "review_id" in output:
+            await tasks_svc.emit_task_event_async(db, task, "task.output.created", {
+                "output_type": "draft", "output_id": output.get("draft_id"), "review_id": output["review_id"],
+            })
+            await manager.broadcast(user.id, "review.created", {
+                "review_id": output["review_id"], "task_id": task.id,
+                "draft_id": output.get("draft_id"),
+            })
+    except Exception as exc:  # pragma: no cover - defensive
+        log.exception("step execution failed: %s", exc)
+        nxt.status = "failed"
+        nxt.error_code = "STEP_FAILED"
+        task.status = "failed"
+        task.error_code = "STEP_FAILED"
+        db.commit()
+        await tasks_svc.emit_task_event_async(db, task, "task.step.failed", {
+            "step_id": nxt.id, "error_code": "STEP_FAILED",
+            "message": "The step could not be completed. You can retry, take over or terminate.",
+            "retryable": True,
+        })
+    done = sum(1 for s in steps if s.status in {"completed", "skipped"})
+    task.progress_percent = round(100 * done / len(steps))
+    db.commit()
+    await tasks_svc.emit_task_event_async(db, task, "task.progress", {
+        "percent": task.progress_percent, "current_step_id": nxt.id,
+        "summary": f"{done}/{len(steps)} steps completed",
+    })
+
+
+async def runner_loop() -> None:
+    log.info("intenda runner started")
+    while True:
+        try:
+            db = SessionLocal()
+            try:
+                await _advance_syncs(db)
+                tasks = (
+                    db.query(m.Task)
+                    .filter(m.Task.status.in_(["queued", "running"]))
+                    .all()
+                )
+                for task in tasks:
+                    await _process_task(db, task)
+            finally:
+                db.close()
+        except Exception:  # pragma: no cover - keep the loop alive
+            log.exception("runner iteration failed")
+        await asyncio.sleep(0.9)
