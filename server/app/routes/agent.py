@@ -131,7 +131,17 @@ async def _run_turn(conversation_id: str, user_id: str, user_message_id: str, co
         yield _sse("message.started", {"conversation_id": conversation_id, "message_id": assistant.id})
         yield _sse("heartbeat", {"conversation_id": conversation_id})
 
-        messages = agent_svc.build_messages(db, user, conv, content, context)
+        messages, auto_thread_ids = agent_svc.build_messages(db, user, conv, content, context)
+        if auto_thread_ids:
+            # Persist auto-matched threads so later turns keep this context.
+            scope = dict(conv.context_scope or {})
+            merged = list(scope.get("thread_ids") or [])
+            for v in auto_thread_ids:
+                if v not in merged:
+                    merged.append(v)
+            scope["thread_ids"] = merged
+            conv.context_scope = scope
+            db.commit()
         deltas: list[str] = []
         error: agent_svc.ModelUnavailable | None = None
         try:
