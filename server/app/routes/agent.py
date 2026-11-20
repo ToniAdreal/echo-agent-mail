@@ -195,6 +195,7 @@ async def _run_turn(conversation_id: str, user_id: str, user_message_id: str, co
             db.commit()
             yield _sse("message.annotation", {
                 "message_id": assistant.id, "annotation_type": "plan", "plan": plan,
+                "annotation": {"type": "plan", "plan": plan},
             })
         else:
             db.commit()

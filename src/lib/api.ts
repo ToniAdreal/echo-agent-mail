@@ -121,7 +121,7 @@ export async function streamAgentMessage(
         continue;
       }
       if (event === 'message.delta') handlers.onDelta?.(payload.delta ?? '');
-      else if (event === 'message.annotation') handlers.onAnnotation?.(payload.annotation);
+      else if (event === 'message.annotation') handlers.onAnnotation?.(payload.annotation ?? (payload.annotation_type ? { type: payload.annotation_type, plan: payload.plan } : undefined));
       else if (event === 'message.completed') handlers.onCompleted?.(payload.message);
       else if (event === 'message.error') handlers.onError?.(payload.message);
     }
