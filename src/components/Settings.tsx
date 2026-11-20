@@ -9,6 +9,7 @@ import {
   SkeletonRows,
   errorText,
   fmtDateTime,
+  navigate,
   useAsync,
   useToast,
 } from '../lib/ui';
@@ -407,6 +408,17 @@ export default function Settings() {
           </div>
           <p className="panel-foot-note">
             {s.about.app} v{s.about.version} · Environment: {s.about.environment}. Audit records are kept for actions taken on your behalf.
+          </p>
+          <p className="panel-foot-note">
+            Read our{' '}
+            <button type="button" className="link-btn" onClick={() => navigate('/privacy')}>
+              Privacy Policy
+            </button>{' '}
+            and{' '}
+            <button type="button" className="link-btn" onClick={() => navigate('/terms')}>
+              Terms of Service
+            </button>
+            .
           </p>
         </section>
       </div>

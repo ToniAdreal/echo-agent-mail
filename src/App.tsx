@@ -6,6 +6,7 @@ import Sidebar from './components/Sidebar';
 import Topbar from './components/Topbar';
 import Composer from './components/Composer';
 import { ForgotPasswordPage, LoginPage, RegisterPage } from './components/Auth';
+import { PrivacyPage, TermsPage } from './components/Legal';
 import Onboarding from './components/Onboarding';
 import Briefing from './components/Briefing';
 import Delegate from './components/Delegate';
@@ -132,6 +133,10 @@ function Shell() {
   }, []);
 
   const openComposer = useCallback((opts?: ComposerOpts) => setComposer(opts ?? { mode: 'new' }), []);
+
+  // Public legal pages: reachable without signing in (OAuth verification, footer links).
+  if (route === '/privacy') return <PrivacyPage />;
+  if (route === '/terms') return <TermsPage />;
 
   if (boot === 'loading') {
     return (

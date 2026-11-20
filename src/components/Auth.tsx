@@ -2,11 +2,25 @@ import { useState } from 'react';
 import { api } from '../lib/api';
 import { ErrorCard, navigate } from '../lib/ui';
 
-function Brand() {
+export function Brand() {
   return (
     <div className="auth-brand">
       <img className="only-night" src="assets/logo-lockup-dark.png" alt="Intenda" />
       <img className="only-day" src="assets/logo-lockup-light.png" alt="Intenda" />
+    </div>
+  );
+}
+
+export function LegalLinks() {
+  return (
+    <div className="auth-legal">
+      <button type="button" className="link-btn" onClick={() => navigate('/privacy')}>
+        Privacy Policy
+      </button>
+      <span aria-hidden="true">·</span>
+      <button type="button" className="link-btn" onClick={() => navigate('/terms')}>
+        Terms of Service
+      </button>
     </div>
   );
 }
@@ -74,6 +88,7 @@ export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
             </button>
           </span>
         </div>
+        <LegalLinks />
       </form>
     </div>
   );
@@ -162,6 +177,7 @@ export function RegisterPage({ onAuthed }: { onAuthed: () => void }) {
             </button>
           </span>
         </div>
+        <LegalLinks />
       </form>
     </div>
   );

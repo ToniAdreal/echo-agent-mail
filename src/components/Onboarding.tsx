@@ -180,6 +180,17 @@ export default function Onboarding({ onReady }: { onReady: () => void }) {
             <p className="hint" style={{ color: 'var(--t4)', fontSize: 12.5, lineHeight: 1.6 }}>
               Intenda never stores your mailbox password. You can disconnect a mailbox at any time in Settings, which revokes access and deletes synced data.
             </p>
+            <p className="hint" style={{ color: 'var(--t4)', fontSize: 12.5, lineHeight: 1.6 }}>
+              See how Intenda handles your data in our{' '}
+              <button type="button" className="link-btn" onClick={() => navigate('/privacy')}>
+                Privacy Policy
+              </button>{' '}
+              and{' '}
+              <button type="button" className="link-btn" onClick={() => navigate('/terms')}>
+                Terms of Service
+              </button>
+              .
+            </p>
           </>
         )}
 
