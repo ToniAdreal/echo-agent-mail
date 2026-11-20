@@ -19,7 +19,7 @@ from ..db import get_db
 from ..deps import audit, get_current_user
 from ..errors import ApiError, ok
 from ..helpers import get_onboarding, set_onboarding_state
-from ..security import new_token, sha256_hex
+from ..security import decrypt_secret, encrypt_secret, new_token, sha256_hex
 from ..services.syncsvc import start_sync
 
 router = APIRouter(prefix="/api/v1", tags=["onboarding"])
@@ -152,7 +152,7 @@ def _start_oauth(db: DbSession, user: m.User, provider: str, redirect_uri: str) 
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
     db.add(m.OAuthState(
         user_id=user.id, provider=provider, state_hash=sha256_hex(state_value),
-        pkce_verifier_ciphertext=verifier,  # demo-grade storage; production must encrypt
+        pkce_verifier_ciphertext=encrypt_secret(verifier),
         redirect_uri=redirect_uri or f"{settings.OAUTH_REDIRECT_BASE_URL}/api/v1/onboarding/oauth/{provider}/callback",
         expires_at=m.now() + timedelta(minutes=10),
     ))
@@ -222,7 +222,7 @@ def oauth_callback(provider: str, request: Request, db: DbSession = Depends(get_
                 "code": code,
                 "grant_type": "authorization_code",
                 "redirect_uri": row.redirect_uri,
-                "code_verifier": row.pkce_verifier_ciphertext or "",
+                "code_verifier": decrypt_secret(row.pkce_verifier_ciphertext or ""),
             },
             timeout=15.0,
         )
@@ -253,12 +253,20 @@ def oauth_callback(provider: str, request: Request, db: DbSession = Depends(get_
         display_name = info.get("name") or info.get("displayName") or display_name
     except Exception:
         pass
+    expires_in = tokens.get("expires_in")
     account = m.MailAccount(
         user_id=user.id, provider=provider, email_address=str(email_address).lower(),
         display_name=display_name, environment="live", status="connected",
         scopes=PROVIDERS[provider]["scopes"],
-        access_token_ciphertext=tokens.get("access_token"),
-        refresh_token_ciphertext=tokens.get("refresh_token"),
+        access_token_ciphertext=(
+            encrypt_secret(tokens["access_token"]) if tokens.get("access_token") else None
+        ),
+        refresh_token_ciphertext=(
+            encrypt_secret(tokens["refresh_token"]) if tokens.get("refresh_token") else None
+        ),
+        token_expires_at=(
+            m.now() + timedelta(seconds=int(expires_in)) if expires_in else None
+        ),
         provider_account_id=str(email_address),
     )
     db.add(account)

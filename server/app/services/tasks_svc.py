@@ -114,9 +114,23 @@ def create_review_draft(
 
 
 def perform_send(db: DbSession, user: m.User, draft: m.EmailDraft) -> dict:
-    """Send a draft. Demo mailboxes only ever simulate the send (spec 4.2)."""
+    """Send a draft. Demo mailboxes only ever simulate the send (spec 4.2).
+
+    Live Google accounts send for real through the Gmail API *before* any
+    local state changes: if the provider call fails, the exception
+    propagates and the caller surfaces an error instead of recording a
+    send that never happened."""
     account = db.get(m.MailAccount, draft.mail_account_id)
     environment = draft.environment
+    provider_message_id: str | None = None
+    if (
+        account is not None
+        and account.environment == "live"
+        and account.provider == "google"
+    ):
+        from . import gmail
+
+        provider_message_id = gmail.send_draft_sync(db, account, draft)
     thread = db.get(m.EmailThread, draft.thread_id) if draft.thread_id else None
     if thread is None:
         thread = m.EmailThread(
@@ -135,6 +149,8 @@ def perform_send(db: DbSession, user: m.User, draft: m.EmailDraft) -> dict:
         # creating a second row would double-count the Sent folder.
         backing.is_draft = False
         backing.is_sent = True
+        if provider_message_id:
+            backing.provider_message_id = provider_message_id
         backing.sent_at = m.now()
         backing.body_text = draft.body_text
         backing.subject = draft.subject
@@ -149,6 +165,7 @@ def perform_send(db: DbSession, user: m.User, draft: m.EmailDraft) -> dict:
             user_id=user.id,
             mail_account_id=draft.mail_account_id,
             thread_id=thread.id,
+            provider_message_id=provider_message_id,
             from_address=account.email_address if account else "you@demo.intenda.example",
             from_name=user.name,
             to_recipients=draft.to_recipients or [],
@@ -178,8 +195,17 @@ def perform_send(db: DbSession, user: m.User, draft: m.EmailDraft) -> dict:
             "message_id": sent_msg.id,
             "notice": SIMULATED_SEND_MESSAGE,
         }
-    # Live providers are not configured in v1.0 demo deployments; the send is
-    # recorded locally and reported honestly as not provider-confirmed.
+    if provider_message_id:
+        return {
+            "simulated": False,
+            "environment": environment,
+            "message_id": sent_msg.id,
+            "provider_message_id": provider_message_id,
+            "notice": "Sent through your connected Gmail account.",
+        }
+    # Live providers other than Google (Microsoft) are not wired up yet; the
+    # send is recorded locally and reported honestly as not
+    # provider-confirmed.
     return {
         "simulated": False,
         "environment": environment,

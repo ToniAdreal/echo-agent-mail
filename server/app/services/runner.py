@@ -17,7 +17,7 @@ from ..db import SessionLocal
 from .. import models as m
 from ..helpers import get_onboarding
 from ..ws import manager
-from . import tasks_svc
+from . import gmail, tasks_svc
 
 log = logging.getLogger("intenda.runner")
 
@@ -30,10 +30,68 @@ SYNC_PHASES = [
 ]
 
 
+async def _advance_live_google_sync(db, job: m.SyncJob, account: m.MailAccount) -> None:
+    """Run a real Gmail sync for a live Google account's job, mirroring the
+    demo path's completion bookkeeping (job counts, cursor, onboarding
+    transition, sync.completed broadcast) with simulated=False."""
+    job.phase = "syncing_messages"
+    db.commit()
+    try:
+        fetched, history_id = await gmail.sync_account(db, account, job.mode)
+    except gmail.GmailAuthError:
+        log.warning("gmail sync for job %s failed: token refresh rejected", job.id)
+        job.status = "failed"
+        job.phase = "failed"
+        job.error_code = "TOKEN_REFRESH_FAILED"
+        job.completed_at = m.now()
+        account.status = "action_required"
+        db.commit()
+        return
+    except Exception:
+        log.exception("gmail sync for job %s failed", job.id)
+        job.status = "failed"
+        job.phase = "failed"
+        job.error_code = "GMAIL_SYNC_FAILED"
+        job.completed_at = m.now()
+        account.status = "connected"
+        db.commit()
+        return
+    job.status = "completed"
+    job.phase = "completed"
+    job.processed_count = fetched
+    job.total_count = fetched
+    job.completed_at = m.now()
+    job.cursor_after = history_id
+    account.status = "connected"
+    user = db.get(m.User, job.user_id)
+    if user is not None:
+        ob = get_onboarding(db, user)
+        if ob.state == "SYNCING":
+            ob.state = "READY"
+            steps = list(ob.completed_steps or [])
+            if "sync" not in steps:
+                steps.append("sync")
+                ob.completed_steps = steps
+    db.commit()
+    await manager.broadcast(job.user_id, "sync.completed", {
+        "job_id": job.id, "account_id": job.mail_account_id,
+        "counts": {"messages": fetched}, "completed_at": m.now().isoformat(),
+        "simulated": False,
+    })
+
+
 async def _advance_syncs(db) -> None:
     jobs = db.query(m.SyncJob).filter(m.SyncJob.status == "running").all()
     duration_ms = max(500, 5 * settings.DEMO_SYNC_DELAY_MS)
     for job in jobs:
+        account = db.get(m.MailAccount, job.mail_account_id)
+        if (
+            account is not None
+            and account.environment == "live"
+            and account.provider == "google"
+        ):
+            await _advance_live_google_sync(db, job, account)
+            continue
         started = job.started_at
         if started is None:
             continue
