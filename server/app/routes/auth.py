@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 from datetime import timedelta
 
+import httpx
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session as DbSession
@@ -41,6 +42,10 @@ class RegisterBody(BaseModel):
 class LoginBody(BaseModel):
     email: str
     password: str
+
+
+class GoogleBody(BaseModel):
+    credential: str = Field(min_length=1)
 
 
 class ResetRequestBody(BaseModel):
@@ -119,6 +124,86 @@ def login(body: LoginBody, request: Request, db: DbSession = Depends(get_db)):
     payload = _session_payload(db, user, request)
     payload["session"] = ser.session(row, row.id)
     return apply_session_cookies(ok(request, payload), token, csrf)
+
+
+@router.get("/config")
+def auth_config(request: Request):
+    """Public sign-in configuration for the auth pages.
+
+    The Google client ID is a public identifier (it ships in every GIS
+    page); the secret never leaves the server. An empty value means
+    Google sign-in is not configured in this deployment and the auth
+    pages simply do not render the button.
+    """
+    return ok(request, {"google_client_id": settings.GOOGLE_CLIENT_ID})
+
+
+def _verify_google_id_token(credential: str) -> dict:
+    """Verify a Google Identity Services ID token against Google's
+    tokeninfo endpoint and return its claims. Raises ApiError on any
+    failure; only tokens issued for this app's client ID with a
+    verified email are accepted."""
+    try:
+        resp = httpx.get(
+            "https://oauth2.googleapis.com/tokeninfo",
+            params={"id_token": credential},
+            timeout=10.0,
+        )
+    except httpx.HTTPError:
+        raise ApiError(502, "PROVIDER_ERROR", "Could not verify the Google sign-in. Please retry.")
+    if resp.status_code != 200:
+        raise ApiError(401, "INVALID_CREDENTIALS", "Google sign-in could not be verified.")
+    claims = resp.json()
+    if claims.get("aud") != settings.GOOGLE_CLIENT_ID:
+        raise ApiError(401, "INVALID_CREDENTIALS", "Google sign-in could not be verified.")
+    if claims.get("email_verified") not in (True, "true"):
+        raise ApiError(401, "INVALID_CREDENTIALS", "Your Google email address is not verified.")
+    email = (claims.get("email") or "").strip().lower()
+    if not EMAIL_RE.match(email):
+        raise ApiError(401, "INVALID_CREDENTIALS", "Google sign-in could not be verified.")
+    claims["email"] = email
+    return claims
+
+
+@router.post("/google")
+def google_signin(body: GoogleBody, request: Request, db: DbSession = Depends(get_db)):
+    """One-click sign-in/sign-up with a GIS ID token. Finds the account
+    by verified email (creating it on first use, like /register) and
+    opens the same session /login would."""
+    if not settings.GOOGLE_CLIENT_ID:
+        raise ApiError(503, "PROVIDER_NOT_CONFIGURED", "Google sign-in is not configured in this deployment.")
+    if not rate_limiter.check(f"google:{request.client.host if request.client else '?'}", 10, 600):
+        raise ApiError(429, "RATE_LIMITED", "Too many sign-in attempts. Please retry later.")
+    claims = _verify_google_id_token(body.credential)
+    email = claims["email"]
+    user = db.query(User).filter(User.email == email, User.deleted_at.is_(None)).first()
+    created = False
+    if user is None:
+        name = (claims.get("name") or "").strip()[:120] or email.split("@")[0]
+        user = User(
+            name=name,
+            email=email,
+            # No usable password: the account signs in with Google.
+            # (Same unusable-random-hash pattern as demo accounts.)
+            password_hash=hash_password(new_token(24)),
+            status="active",
+            terms_accepted_at=now(),
+            email_verified_at=now(),
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        get_settings_row(db, user)
+        set_onboarding_state(db, user, "ACCOUNT_CREATED", step="account")
+        created = True
+    elif user.email_verified_at is None:
+        user.email_verified_at = now()
+    row, token, csrf = create_session(db, request, user)
+    audit(db, user, "auth.google", "user", user.id, request=request)
+    db.commit()
+    payload = _session_payload(db, user, request)
+    payload["session"] = ser.session(row, row.id)
+    return apply_session_cookies(ok(request, payload, status=201 if created else 200), token, csrf)
 
 
 @router.post("/logout")

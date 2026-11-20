@@ -23,6 +23,7 @@ CSRF_HEADER = "x-csrf-token"
 CSRF_EXEMPT_SUFFIXES = (
     "/auth/register",
     "/auth/login",
+    "/auth/google",
     "/auth/demo-session",
     "/auth/password/reset/request",
     "/auth/password/reset/complete",

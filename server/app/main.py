@@ -65,7 +65,8 @@ def create_app() -> FastAPI:
         response.headers["Referrer-Policy"] = "same-origin"
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-            "font-src 'self' https://fonts.gstatic.com; script-src 'self'; connect-src 'self' ws: wss:"
+            "font-src 'self' https://fonts.gstatic.com; script-src 'self' https://accounts.google.com; "
+            "frame-src 'self' https://accounts.google.com; connect-src 'self' ws: wss: https://accounts.google.com"
         )
         return response
 

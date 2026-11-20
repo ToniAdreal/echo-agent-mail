@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api';
+import { fetchGoogleClientId, renderGoogleButton, setGoogleCredentialHandler } from '../lib/google';
 import { ErrorCard, navigate } from '../lib/ui';
 
 export function Brand() {
@@ -22,6 +23,68 @@ export function LegalLinks() {
         Terms of Service
       </button>
     </div>
+  );
+}
+
+/**
+ * "Continue with Google" one-click button (Google Identity Services).
+ * Renders only when this deployment has a Google client ID configured.
+ * The credential is posted to /api/v1/auth/google, which verifies it and
+ * opens the same session as the password flow. `gate` lets the register
+ * page enforce its terms checkbox before the credential is submitted.
+ * All GIS lifecycle handling (script readiness, initialize-once,
+ * per-mount rendering) lives in ../lib/google.
+ */
+export function GoogleSignInButton({
+  text,
+  onAuthed,
+  onError,
+  gate,
+}: {
+  text: 'signin_with' | 'signup_with' | 'continue_with';
+  onAuthed: () => void;
+  onError: (err: unknown) => void;
+  gate?: () => boolean;
+}) {
+  const slotRef = useRef<HTMLDivElement>(null);
+  const [available, setAvailable] = useState(false);
+  // Always dispatch to the latest callbacks (the register gate closes
+  // over live form state), never to the ones captured at first render.
+  const cbRef = useRef({ onAuthed, onError, gate });
+  cbRef.current = { onAuthed, onError, gate };
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchGoogleClientId().then((clientId) => {
+      if (cancelled || !clientId || !slotRef.current) return;
+      setAvailable(true);
+      setGoogleCredentialHandler(async (credential) => {
+        const cb = cbRef.current;
+        if (cb.gate && !cb.gate()) return;
+        try {
+          await api('/api/v1/auth/google', { method: 'POST', body: { credential } });
+          cb.onAuthed();
+        } catch (err) {
+          cb.onError(err);
+        }
+      });
+      void renderGoogleButton(slotRef.current, clientId, { text });
+    });
+    return () => {
+      cancelled = true;
+      setGoogleCredentialHandler(null);
+    };
+  }, [text]);
+
+  return (
+    <>
+      {available && (
+        <div className="auth-divider" aria-hidden="true">
+          <span>or</span>
+        </div>
+      )}
+      <div className="google-btn-slot" ref={slotRef} />
+    </>
   );
 }
 
@@ -77,6 +140,7 @@ export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
         <button className="btn btn-dark btn-block" type="button" onClick={demo} disabled={busy}>
           Try the one-click demo account
         </button>
+        <GoogleSignInButton text="continue_with" onAuthed={onAuthed} onError={setError} />
         <div className="auth-links">
           <button type="button" className="link-btn" onClick={() => navigate('/forgot-password')}>
             Forgot password?
@@ -169,6 +233,18 @@ export function RegisterPage({ onAuthed }: { onAuthed: () => void }) {
         <button className="btn btn-primary btn-block btn-lg" type="submit" disabled={busy}>
           {busy ? 'Creating account…' : 'Create account'}
         </button>
+        <GoogleSignInButton
+          text="signup_with"
+          onAuthed={onAuthed}
+          onError={setError}
+          gate={() => {
+            if (!terms) {
+              setError(new Error('Please accept the Terms and Privacy Policy to continue.'));
+              return false;
+            }
+            return true;
+          }}
+        />
         <div className="auth-links">
           <span>
             Already have an account?{' '}

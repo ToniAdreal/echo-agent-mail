@@ -2360,6 +2360,32 @@ button.agent-row.clickable:hover .agent-row-title {
   color: var(--t4);
 }
 
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+  font-size: 12px;
+  color: var(--t4);
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--border);
+}
+
+.google-btn-slot {
+  margin-top: 12px;
+  display: flex;
+  justify-content: center;
+}
+
+.google-btn-slot:empty {
+  margin-top: 0;
+}
+
 /* ---------- legal pages (privacy / terms) ---------- */
 .legal-card {
   max-width: 780px;
