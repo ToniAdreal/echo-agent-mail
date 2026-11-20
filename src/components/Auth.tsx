@@ -7,8 +7,6 @@ function Brand() {
     <div className="auth-brand">
       <img className="only-night" src="assets/logo-lockup-dark.png" alt="Intenda" />
       <img className="only-day" src="assets/logo-lockup-light.png" alt="Intenda" />
-      <span className="brand-name">Intenda</span>
-      <span style={{ color: 'var(--t3)' }}>意达</span>
     </div>
   );
 }

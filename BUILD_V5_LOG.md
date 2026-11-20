@@ -275,3 +275,9 @@ Build follows BUILD_BRIEF_V5.md (process) and Intenda-Product-Specification-v1.0
 - Fix: frontend parser now falls back to building {type, plan} from annotation_type/plan; backend also emits an explicit `annotation` object in the same event. SYSTEM_PROMPT gained one rule: cite key facts (amounts, dates, reference numbers) from the context when summarizing or planning.
 - Logo re-verified by pixel analysis of the live screenshot: the visible mark's non-background pixels average (193,187,163) on the dark card, i.e. the silver lockup renders correctly in night mode; the earlier "dark-on-dark" reading came from inspecting the hidden day-variant file.
 - Verified: pytest 26 passed, smoke 13/13, vite build OK.
+
+## 2026-11-19 22:3x PST — Combined logo lockup (user-supplied ChatGPT artwork)
+- User had ChatGPT (original brand thread) generate a combined lockup: comet icon + "Intenda" wordmark in one image, and supplied the PNG directly (white art, transparent background, 2172x724).
+- Processed locally: trimmed to content, saved as public/assets/logo-lockup-dark.png (light art, night mode). Derived the day version from the same alpha with flat near-black (26,27,32) art as logo-lockup-light.png.
+- Removed the HTML brand text next to the logo in both places per user instruction: Sidebar brand row (the 意达 span) and the sign-in card brand (Intenda + 意达 spans). Lockup display heights adjusted (sidebar 34px, auth 46px). Favicon stays the icon-only mark.
+- Verified: vite build OK; dist lockups' opaque-pixel averages match expectations (251,251,252) / (26,27,32).

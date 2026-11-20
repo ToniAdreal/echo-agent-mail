@@ -216,7 +216,7 @@ input:focus {
 }
 
 .brand-logo {
-  height: 26px;
+  height: 34px;
   width: auto;
   display: block;
 }
@@ -2273,7 +2273,7 @@ button.agent-row.clickable:hover .agent-row-title {
 }
 
 .auth-brand img {
-  height: 30px;
+  height: 46px;
   width: auto;
 }
 

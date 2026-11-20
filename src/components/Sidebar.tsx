@@ -121,7 +121,6 @@ export default function Sidebar() {
         <div className="brand-row">
           <img className="brand-logo only-night" src="assets/logo-lockup-dark.png" alt="Intenda" />
           <img className="brand-logo only-day" src="assets/logo-lockup-light.png" alt="Intenda" />
-          <span className="brand-cn">意达</span>
         </div>
         <div className="brand-sub">FROM INTENT TO DONE</div>
       </div>
