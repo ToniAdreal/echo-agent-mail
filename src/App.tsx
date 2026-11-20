@@ -7,6 +7,7 @@ import Topbar from './components/Topbar';
 import Composer from './components/Composer';
 import { ForgotPasswordPage, LoginPage, RegisterPage } from './components/Auth';
 import { PrivacyPage, TermsPage } from './components/Legal';
+import LandingPage from './components/Landing';
 import Onboarding from './components/Onboarding';
 import Briefing from './components/Briefing';
 import Delegate from './components/Delegate';
@@ -151,6 +152,15 @@ function Shell() {
   if (boot === 'anon') {
     if (route === '/register') return <RegisterPage onAuthed={bootstrap} />;
     if (route === '/forgot-password') return <ForgotPasswordPage />;
+    // Public landing page at / so signed-out visitors (and OAuth reviewers)
+    // see what the product is before being asked to sign in.
+    if (route === '/')
+      return (
+        <LandingPage
+          onSignIn={() => navigate('/login')}
+          onRegister={() => navigate('/register')}
+        />
+      );
     return <LoginPage onAuthed={bootstrap} />;
   }
 
