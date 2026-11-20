@@ -116,10 +116,10 @@ def create_review_draft(
 def perform_send(db: DbSession, user: m.User, draft: m.EmailDraft) -> dict:
     """Send a draft. Demo mailboxes only ever simulate the send (spec 4.2).
 
-    Live Google accounts send for real through the Gmail API *before* any
-    local state changes: if the provider call fails, the exception
-    propagates and the caller surfaces an error instead of recording a
-    send that never happened."""
+    Live Google and Microsoft accounts send for real through their
+    provider API *before* any local state changes: if the provider call
+    fails, the exception propagates and the caller surfaces an error
+    instead of recording a send that never happened."""
     account = db.get(m.MailAccount, draft.mail_account_id)
     environment = draft.environment
     provider_message_id: str | None = None
@@ -131,6 +131,14 @@ def perform_send(db: DbSession, user: m.User, draft: m.EmailDraft) -> dict:
         from . import gmail
 
         provider_message_id = gmail.send_draft_sync(db, account, draft)
+    elif (
+        account is not None
+        and account.environment == "live"
+        and account.provider == "microsoft"
+    ):
+        from . import graphmail
+
+        provider_message_id = graphmail.send_draft_sync(db, account, draft)
     thread = db.get(m.EmailThread, draft.thread_id) if draft.thread_id else None
     if thread is None:
         thread = m.EmailThread(
@@ -196,16 +204,21 @@ def perform_send(db: DbSession, user: m.User, draft: m.EmailDraft) -> dict:
             "notice": SIMULATED_SEND_MESSAGE,
         }
     if provider_message_id:
+        provider_name = (
+            "Gmail"
+            if account is not None and account.provider == "google"
+            else "Microsoft"
+        )
         return {
             "simulated": False,
             "environment": environment,
             "message_id": sent_msg.id,
             "provider_message_id": provider_message_id,
-            "notice": "Sent through your connected Gmail account.",
+            "notice": f"Sent through your connected {provider_name} account.",
         }
-    # Live providers other than Google (Microsoft) are not wired up yet; the
-    # send is recorded locally and reported honestly as not
-    # provider-confirmed.
+    # A live account whose provider is neither Google nor Microsoft (or a
+    # missing account row) has no wired-up send path; the send is recorded
+    # locally and reported honestly as not provider-confirmed.
     return {
         "simulated": False,
         "environment": environment,

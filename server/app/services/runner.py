@@ -17,7 +17,7 @@ from ..db import SessionLocal
 from .. import models as m
 from ..helpers import get_onboarding
 from ..ws import manager
-from . import gmail, tasks_svc
+from . import gmail, graphmail, tasks_svc
 
 log = logging.getLogger("intenda.runner")
 
@@ -30,16 +30,29 @@ SYNC_PHASES = [
 ]
 
 
-async def _advance_live_google_sync(db, job: m.SyncJob, account: m.MailAccount) -> None:
-    """Run a real Gmail sync for a live Google account's job, mirroring the
+async def _run_live_sync(
+    db,
+    job: m.SyncJob,
+    account: m.MailAccount,
+    *,
+    sync,
+    auth_error: type[Exception],
+    failed_code: str,
+    label: str,
+) -> None:
+    """Run a real provider sync for a live account's job, mirroring the
     demo path's completion bookkeeping (job counts, cursor, onboarding
-    transition, sync.completed broadcast) with simulated=False."""
+    transition, sync.completed broadcast) with simulated=False. ``sync``
+    is the provider service's sync_account coroutine; ``auth_error`` is
+    its dead-grant exception, mapped to TOKEN_REFRESH_FAILED with the
+    account parked at action_required; any other failure maps to
+    ``failed_code`` with the account back to connected."""
     job.phase = "syncing_messages"
     db.commit()
     try:
-        fetched, history_id = await gmail.sync_account(db, account, job.mode)
-    except gmail.GmailAuthError:
-        log.warning("gmail sync for job %s failed: token refresh rejected", job.id)
+        fetched, cursor = await sync(db, account, job.mode)
+    except auth_error:
+        log.warning("%s sync for job %s failed: token refresh rejected", label, job.id)
         job.status = "failed"
         job.phase = "failed"
         job.error_code = "TOKEN_REFRESH_FAILED"
@@ -48,10 +61,10 @@ async def _advance_live_google_sync(db, job: m.SyncJob, account: m.MailAccount) 
         db.commit()
         return
     except Exception:
-        log.exception("gmail sync for job %s failed", job.id)
+        log.exception("%s sync for job %s failed", label, job.id)
         job.status = "failed"
         job.phase = "failed"
-        job.error_code = "GMAIL_SYNC_FAILED"
+        job.error_code = failed_code
         job.completed_at = m.now()
         account.status = "connected"
         db.commit()
@@ -61,7 +74,7 @@ async def _advance_live_google_sync(db, job: m.SyncJob, account: m.MailAccount) 
     job.processed_count = fetched
     job.total_count = fetched
     job.completed_at = m.now()
-    job.cursor_after = history_id
+    job.cursor_after = cursor
     account.status = "connected"
     user = db.get(m.User, job.user_id)
     if user is not None:
@@ -80,6 +93,28 @@ async def _advance_live_google_sync(db, job: m.SyncJob, account: m.MailAccount) 
     })
 
 
+async def _advance_live_google_sync(db, job: m.SyncJob, account: m.MailAccount) -> None:
+    """Run a real Gmail sync for a live Google account's job."""
+    await _run_live_sync(
+        db, job, account,
+        sync=gmail.sync_account,
+        auth_error=gmail.GmailAuthError,
+        failed_code="GMAIL_SYNC_FAILED",
+        label="gmail",
+    )
+
+
+async def _advance_live_microsoft_sync(db, job: m.SyncJob, account: m.MailAccount) -> None:
+    """Run a real Microsoft Graph sync for a live Microsoft account's job."""
+    await _run_live_sync(
+        db, job, account,
+        sync=graphmail.sync_account,
+        auth_error=graphmail.GraphAuthError,
+        failed_code="GRAPH_SYNC_FAILED",
+        label="microsoft graph",
+    )
+
+
 async def _advance_syncs(db) -> None:
     jobs = db.query(m.SyncJob).filter(m.SyncJob.status == "running").all()
     duration_ms = max(500, 5 * settings.DEMO_SYNC_DELAY_MS)
@@ -91,6 +126,13 @@ async def _advance_syncs(db) -> None:
             and account.provider == "google"
         ):
             await _advance_live_google_sync(db, job, account)
+            continue
+        if (
+            account is not None
+            and account.environment == "live"
+            and account.provider == "microsoft"
+        ):
+            await _advance_live_microsoft_sync(db, job, account)
             continue
         started = job.started_at
         if started is None:
