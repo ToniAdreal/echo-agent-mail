@@ -257,3 +257,8 @@ Build follows BUILD_BRIEF_V5.md (process) and Intenda-Product-Specification-v1.0
 - server/.env.example rewritten to the config module's real variable
   names (LLM_*, GOOGLE_*/MICROSOFT_* OAuth, SESSION_SECRET,
   TOKEN_ENCRYPTION_KEY, DEMO_* , AGENT_REQUESTS_PER_*).
+
+## 2026-11-19 21:5x PST — Asset fix (post-deploy)
+- User screenshot showed the brand logo broken on the sign-in card. Root cause: the V5 frontend references 22 themed asset files (assets/logo-lockup-{dark,light}.png, galaxy, nebula, intent-orbit, mailbox-connect, empty-* pairs) that were never created; the SPA fallback returned index.html for them, so every <img> broke.
+- Fix without code changes: materialized all 22 files in public/assets/ from the existing brand artwork (logo-silver/logo-dark art for the lockups, asset_hero_orbit(+day) for galaxy, asset_nebula_glow for nebula, asset_orbit_motif(+day) for intent-orbit and all empty states, asset_intent_ribbon(+day) for mailbox-connect).
+- Verified: vite build OK; local uvicorn run served all 22 referenced assets as 200 image/png and /api/v1/health ok.
