@@ -61,6 +61,8 @@ def message(msg: m.EmailMessage, attachments: list | None = None) -> dict:
         "is_draft": msg.is_draft,
         "is_sent": msg.is_sent,
         "is_trashed": msg.is_trashed,
+        "injection_suspect": bool(msg.injection_suspect),
+        "injection_flags": msg.injection_flags or [],
         "environment": msg.environment,
         "has_attachment": bool(attachments),
         "created_at": utc_iso(msg.created_at),
@@ -100,6 +102,7 @@ def thread(t: m.EmailThread, latest: m.EmailMessage | None = None) -> dict:
         "last_message_at": utc_iso(t.last_message_at),
         "is_archived": t.is_archived,
         "is_trashed": t.is_trashed,
+        "injection_suspect": bool(t.injection_suspect),
         "environment": t.environment,
     }
     if latest is not None:

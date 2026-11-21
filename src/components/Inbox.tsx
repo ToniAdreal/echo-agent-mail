@@ -8,6 +8,7 @@ import {
   Reply,
   ReplyAll,
   Send,
+  ShieldAlert,
   Sparkles,
   Star,
   Trash2,
@@ -257,6 +258,14 @@ export default function Inbox() {
                     <span className="mail-subject">{msg.subject}</span>
                     <span className="mail-snippet">{msg.snippet}</span>
                   </span>
+                  {msg.injection_suspect && (
+                    <span
+                      className="injection-flag"
+                      title={`Possible prompt injection: ${(msg.injection_flags ?? []).map((f) => f.reason).join('; ')}`}
+                    >
+                      <ShieldAlert size={14} />
+                    </span>
+                  )}
                   {!msg.is_read && <span className="unread-dot" />}
                 </button>
               ))}
@@ -279,7 +288,25 @@ export default function Inbox() {
                 <EnvLabel env={detail.environment} />
                 {detail.has_attachment && <span className="pill pill-neutral">Has attachments</span>}
                 {detail.is_starred && <span className="pill pill-khaki">Starred</span>}
+                {detail.injection_suspect && (
+                  <span
+                    className="pill pill-danger"
+                    title={(detail.injection_flags ?? []).map((f) => f.reason).join('; ')}
+                  >
+                    Possible prompt injection
+                  </span>
+                )}
               </div>
+              {detail.injection_suspect && (
+                <div className="injection-warning">
+                  This message was flagged as a possible prompt-injection attempt
+                  {(detail.injection_flags ?? []).length > 0 && (
+                    <>: {(detail.injection_flags ?? []).map((f) => f.reason).join('; ')}</>
+                  )}
+                  . It is excluded from automatic Agent processing. You can still read it and act
+                  manually; anything the Agent drafts for you still goes through the Review Queue.
+                </div>
+              )}
               <div className="read-meta">
                 <span className="mail-avatar">{initials(detail.from_name ?? detail.from_address)}</span>
                 <span className="read-meta-main">

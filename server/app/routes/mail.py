@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import Session as DbSession
 
+from .. import injection_guard
 from .. import models as m
 from .. import serializers as ser
 from ..db import get_db
@@ -117,6 +118,10 @@ def list_emails(request: Request, account_id: str | None = None, folder: str | N
         q = q.filter(m.EmailMessage.id.in_(ids)) if ids else q.filter(False)
     q = q.order_by(m.EmailMessage.created_at.desc())
     items, next_cursor, total = paginate(q, limit, cursor)
+    # Lazy prompt-injection scan for mail that predates ingest scanning,
+    # so the badge fields below are accurate.
+    if any([injection_guard.ensure_scanned(db, x) for x in items]):
+        db.commit()
     att_ids = _attachment_message_ids(db)
     return ok(request, {
         "items": [ser.message_summary(x, x.id in att_ids) for x in items],
@@ -127,6 +132,8 @@ def list_emails(request: Request, account_id: str | None = None, folder: str | N
 @router.get("/emails/{message_id}")
 def get_email(message_id: str, request: Request, db: DbSession = Depends(get_db), user: m.User = Depends(get_current_user)):
     msg = _own_message(db, user, message_id)
+    if injection_guard.ensure_scanned(db, msg):
+        db.commit()
     atts = db.query(m.EmailAttachment).filter(m.EmailAttachment.message_id == msg.id).all()
     thread = db.get(m.EmailThread, msg.thread_id)
     return ok(request, {
@@ -406,6 +413,10 @@ def list_threads(request: Request, account_id: str | None = None, folder: str | 
         query = query.filter(m.EmailThread.subject_normalized.ilike(f"%{q}%"))
     query = query.order_by(m.EmailThread.last_message_at.desc())
     items, next_cursor, total = paginate(query, limit, cursor)
+    # Lazy prompt-injection scan (see list_emails) so thread badges and
+    # the rolled-up thread flag are accurate for older mail.
+    if any([injection_guard.ensure_thread_scanned(db, t.id) for t in items]):
+        db.commit()
     out = []
     for t in items:
         latest = (
@@ -429,6 +440,8 @@ def list_threads(request: Request, account_id: str | None = None, folder: str | 
 @router.get("/threads/{thread_id}")
 def get_thread(thread_id: str, request: Request, db: DbSession = Depends(get_db), user: m.User = Depends(get_current_user)):
     thread = _own_thread(db, user, thread_id)
+    if injection_guard.ensure_thread_scanned(db, thread.id):
+        db.commit()
     msgs = (
         db.query(m.EmailMessage)
         .filter(m.EmailMessage.thread_id == thread.id)

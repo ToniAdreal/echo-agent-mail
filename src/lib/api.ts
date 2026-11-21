@@ -214,6 +214,13 @@ export interface Person {
   email: string;
 }
 
+export interface InjectionFlag {
+  field: string;
+  pattern: string;
+  reason: string;
+  excerpt?: string;
+}
+
 export interface MailMessage {
   id: string;
   thread_id: string;
@@ -231,6 +238,8 @@ export interface MailMessage {
   is_sent: boolean;
   is_trashed: boolean;
   has_attachment: boolean;
+  injection_suspect?: boolean;
+  injection_flags?: InjectionFlag[];
   environment: 'demo' | 'live';
   created_at: string;
   attachments?: Attachment[];
@@ -254,6 +263,7 @@ export interface ThreadItem {
   unread_count: number;
   is_archived: boolean;
   is_trashed: boolean;
+  injection_suspect?: boolean;
   environment: 'demo' | 'live';
   latest_message?: MailMessage;
 }

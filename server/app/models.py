@@ -122,6 +122,9 @@ class EmailThread(Base):
     last_message_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
     is_trashed: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Rolled up from the messages by app.injection_guard: True when any
+    # message in the thread was flagged as a possible prompt injection.
+    injection_suspect: Mapped[bool] = mapped_column(Boolean, default=False)
     environment: Mapped[str] = mapped_column(String(16), default="demo")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
@@ -154,6 +157,11 @@ class EmailMessage(Base):
     is_draft: Mapped[bool] = mapped_column(Boolean, default=False)
     is_sent: Mapped[bool] = mapped_column(Boolean, default=False)
     is_trashed: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Prompt-injection guard (app.injection_guard): injection_flags is
+    # NULL until the message has been scanned, then a list of flag dicts
+    # (empty when clean); injection_suspect mirrors bool(flags).
+    injection_suspect: Mapped[bool] = mapped_column(Boolean, default=False)
+    injection_flags: Mapped[list | None] = mapped_column(JSON, nullable=True)
     environment: Mapped[str] = mapped_column(String(16), default="demo")
     provider_payload_ref: Mapped[str | None] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

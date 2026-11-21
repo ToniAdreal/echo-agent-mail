@@ -170,7 +170,18 @@ def run_automation(automation_id: str, request: Request, db: DbSession = Depends
         .limit(100)
         .all()
     )
-    matched = [x for x in messages if _matches(x, a.conditions or {})]
+    # Scan-on-read backstop so the exclusion below also covers mail that
+    # predates ingest-time scanning.
+    from .. import injection_guard
+
+    if any([injection_guard.ensure_scanned(db, x) for x in messages]):
+        db.commit()
+    matched_all = [x for x in messages if _matches(x, a.conditions or {})]
+    # Automatic-processing exclusion: messages flagged as possible prompt
+    # injections are never drafted from, summarised or turned into to-dos
+    # by an automation. The user can still open and act on them manually.
+    matched = [x for x in matched_all if not x.injection_suspect]
+    skipped_flagged = len(matched_all) - len(matched)
     results: list[dict] = []
     account = (
         db.query(m.MailAccount)
@@ -220,10 +231,12 @@ def run_automation(automation_id: str, request: Request, db: DbSession = Depends
     if not matched:
         run.status = "needs_attention"
         run.result_payload = {"matched": 0, "actions": results,
+                              "skipped_injection_suspect": skipped_flagged,
                               "note": "No messages matched the conditions, so no action was taken."}
     else:
         run.status = "success"
-        run.result_payload = {"matched": len(matched), "actions": results}
+        run.result_payload = {"matched": len(matched), "actions": results,
+                              "skipped_injection_suspect": skipped_flagged}
     run.completed_at = m.now()
     db.commit()
     db.refresh(run)

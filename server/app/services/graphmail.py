@@ -258,6 +258,11 @@ def _upsert_message(db: DbSession, account: m.MailAccount, parsed: dict) -> m.Em
     for att in parsed["attachments"]:
         db.add(m.EmailAttachment(message_id=msg.id, **att))
     db.flush()
+    # Prompt-injection guard: scan the freshly stored content (subject,
+    # body, sender name, attachment filenames) before anything reads it.
+    from .. import injection_guard
+
+    injection_guard.scan_message(db, msg)
     return thread
 
 

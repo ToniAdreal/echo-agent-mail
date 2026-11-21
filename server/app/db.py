@@ -32,6 +32,11 @@ def init_db() -> None:
     from . import models  # noqa: F401  (register models)
 
     Base.metadata.create_all(bind=engine)
+    # create_all never alters existing tables; backfill the
+    # prompt-injection guard columns on older databases.
+    from .injection_guard import ensure_columns
+
+    ensure_columns(engine)
 
 
 def get_db():
